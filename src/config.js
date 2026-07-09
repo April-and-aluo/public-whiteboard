@@ -2,13 +2,9 @@
 // config.js - 部署配置
 // ============================================
 // WebSocket 服务器地址
-// 当前使用 Yjs 官方公共服务器（稳定，免费）
+// 部署在 Cloudflare Workers（免费，不休眠，全球边缘）
 //
-// 如需自建服务器，修改为你的地址：
-//   Render:   'wss://your-app.onrender.com'
-//   Fly.io:   'wss://your-app.fly.dev'
-//
-// 留空则使用 y-webrtc P2P 模式
+// 如需更换，修改为你的地址即可
 // ============================================
 
-window.WS_URL = 'wss://demos.yjs.dev/ws';
+window.WS_URL = 'wss://whiteboard-ws.imaginary-swordfish.workers.dev';
