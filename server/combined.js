@@ -72,12 +72,19 @@ function send(doc, conn, m) {
 // 关闭连接并清理
 function closeConn(doc, conn) {
   if (doc.conns.has(conn)) {
+    const clientIDs = doc.conns.get(conn);
     doc.conns.delete(conn);
+    // 移除该连接关联的 awareness 状态
     awarenessProtocol.removeAwarenessStates(
       doc.awareness,
-      Array.from(doc.conns.get(conn) || []),
+      Array.from(clientIDs || []),
       null
     );
+    // 移除文档更新监听器
+    if (conn._updateHandler) {
+      doc.off('update', conn._updateHandler);
+      conn._updateHandler = null;
+    }
     // 如果房间没有人了，删除文档释放内存
     if (doc.conns.size === 0) {
       for (const [name, d] of docs) {
@@ -194,7 +201,7 @@ function setupWSConnection(conn, req, docName) {
   }
 
   // 监听文档更新，广播给其他客户端
-  const updateHandler = (update, origin) => {
+  conn._updateHandler = (update, origin) => {
     if (origin !== conn) {
       const enc = encoding.createEncoder();
       encoding.writeVarUint(enc, messageSync);
@@ -202,7 +209,7 @@ function setupWSConnection(conn, req, docName) {
       send(doc, conn, encoding.toUint8Array(enc));
     }
   };
-  doc.on('update', updateHandler);
+  doc.on('update', conn._updateHandler);
 
   // 监听 awareness 更新，广播给其他客户端
   const awarenessHandler = ({ added, updated, removed }, origin) => {
