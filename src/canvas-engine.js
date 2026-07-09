@@ -54,9 +54,11 @@ export class CanvasEngine {
     this.onErase = null; // (worldX, worldY) => boolean(是否命中删除)
     this.onImagePlace = null; // (worldX, worldY) => void
     this.onSelectClick = null; // (worldX, worldY) => void
+    this.onTextPlace = null; // (worldX, worldY) => void
     this.onCursorMove = null; // (worldX, worldY) => void
     this.onViewportChange = null;
     this.selectedImage = null; // 当前选中的图片对象（用于高亮显示）
+    this.selectedText = null; // 当前选中的文字对象（用于高亮显示）
 
     this._setupCanvas();
     this._setupEventListeners();
@@ -166,6 +168,8 @@ export class CanvasEngine {
       this._eraseAt(world.x, world.y);
     } else if (tool === 'image' && this.pendingImage) {
       this._placeImage(world.x, world.y);
+    } else if (tool === 'text') {
+      if (this.onTextPlace) this.onTextPlace(world.x, world.y);
     } else if (tool === 'select') {
       if (this.onSelectClick) this.onSelectClick(world.x, world.y);
     }
@@ -418,6 +422,11 @@ export class CanvasEngine {
       this.renderImages(ctx);
     }
 
+    // 绘制所有文字
+    if (this.renderTexts) {
+      this.renderTexts(ctx);
+    }
+
     // 绘制所有笔画
     if (this.renderStrokes) {
       this.renderStrokes(ctx);
@@ -453,6 +462,34 @@ export class CanvasEngine {
         ctx.fillRect(x - 3, y - 3, 6, 6);
       }
       ctx.restore();
+    }
+
+    // 绘制选中文字的高亮边框
+    if (this.selectedText) {
+      const t = this.selectedText;
+      const bounds = this._getTextBounds(t);
+      if (bounds) {
+        const cx = (bounds.minX + bounds.maxX) / 2;
+        const cy = (bounds.minY + bounds.maxY) / 2;
+        const rotation = (t.rotation || 0) * Math.PI / 180;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(rotation);
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 2 / this.scale;
+        ctx.setLineDash([8 / this.scale, 4 / this.scale]);
+        ctx.strokeRect(-(bounds.maxX - bounds.minX) / 2 - 4, -(bounds.maxY - bounds.minY) / 2 - 4, (bounds.maxX - bounds.minX) + 8, (bounds.maxY - bounds.minY) + 8);
+        ctx.setLineDash([]);
+        const dw = bounds.maxX - bounds.minX;
+        const dh = bounds.maxY - bounds.minY;
+        const corners = [[-dw/2-4, -dh/2-4], [dw/2+4, -dh/2-4], [dw/2+4, dh/2+4], [-dw/2-4, dh/2+4]];
+        ctx.fillStyle = '#3b82f6';
+        for (const [x, y] of corners) {
+          ctx.fillRect(x - 3, y - 3, 6, 6);
+        }
+        ctx.restore();
+      }
     }
 
     ctx.restore();
@@ -494,7 +531,7 @@ export class CanvasEngine {
   }
 
   // 设置渲染数据源
-  setRenderSources(imagesGetter, strokesGetter) {
+  setRenderSources(imagesGetter, strokesGetter, textsGetter) {
     this.renderImages = (ctx) => {
       const images = imagesGetter();
       for (const img of images) {
@@ -507,6 +544,14 @@ export class CanvasEngine {
         this._drawStroke(ctx, s);
       }
     };
+    if (textsGetter) {
+      this.renderTexts = (ctx) => {
+        const texts = textsGetter();
+        for (const t of texts) {
+          this._drawText(ctx, t);
+        }
+      };
+    }
   }
 
   // 绘制图片（支持旋转、透明度、缩放）
@@ -549,6 +594,68 @@ export class CanvasEngine {
       ctx.drawImage(imageObj, -dw / 2, -dh / 2, dw, dh);
       ctx.restore();
     }
+  }
+
+  // 绘制文字（支持旋转、透明度、缩放）
+  _drawText(ctx, t) {
+    const rotation = t.rotation || 0;
+    const opacity = t.opacity !== undefined ? t.opacity : 1;
+    const scale = t.scale !== undefined ? t.scale : 1;
+    const fontSize = (t.fontSize || 24) * scale;
+    const color = t.color || '#422006';
+    const content = t.content || '';
+
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.font = `${fontSize}px 'Patrick Hand', 'Caveat', cursive`;
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'top';
+    ctx.translate(t.x, t.y);
+    ctx.rotate(rotation * Math.PI / 180);
+
+    // 支持多行文字
+    const lines = content.split('\n');
+    const lineHeight = fontSize * 1.3;
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], 0, i * lineHeight);
+    }
+    ctx.restore();
+  }
+
+  // 获取文字的边界框（世界坐标）
+  _getTextBounds(t) {
+    const content = t.content || '';
+    if (!content) return null;
+    const scale = t.scale !== undefined ? t.scale : 1;
+    const fontSize = (t.fontSize || 24) * scale;
+    const lines = content.split('\n');
+    const lineHeight = fontSize * 1.3;
+
+    // 使用 canvas measureText 获取文字宽度
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = `${fontSize}px 'Patrick Hand', 'Caveat', cursive`;
+    let maxW = 0;
+    for (const line of lines) {
+      const m = ctx.measureText(line);
+      if (m.width > maxW) maxW = m.width;
+    }
+    ctx.restore();
+
+    const w = maxW;
+    const h = lines.length * lineHeight;
+    const rotation = (t.rotation || 0) * Math.PI / 180;
+    const cx = t.x + w / 2;
+    const cy = t.y + h / 2;
+    // 旋转后的边界框
+    const bw = Math.abs(w * Math.cos(rotation)) + Math.abs(h * Math.sin(rotation));
+    const bh = Math.abs(w * Math.sin(rotation)) + Math.abs(h * Math.cos(rotation));
+    return {
+      minX: cx - bw / 2,
+      minY: cy - bh / 2,
+      maxX: cx + bw / 2,
+      maxY: cy + bh / 2,
+    };
   }
 
   // ===== 工具状态设置 =====
@@ -621,7 +728,7 @@ export class CanvasEngine {
   // ===== 导出辅助 =====
 
   // 计算所有内容的边界范围
-  getContentBounds(strokes, images) {
+  getContentBounds(strokes, images, texts) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
     for (const s of strokes) {
@@ -647,6 +754,18 @@ export class CanvasEngine {
       minY = Math.min(minY, cy - bh / 2);
       maxX = Math.max(maxX, cx + bw / 2);
       maxY = Math.max(maxY, cy + bh / 2);
+    }
+
+    if (texts) {
+      for (const t of texts) {
+        const bounds = this._getTextBounds(t);
+        if (bounds) {
+          minX = Math.min(minX, bounds.minX);
+          minY = Math.min(minY, bounds.minY);
+          maxX = Math.max(maxX, bounds.maxX);
+          maxY = Math.max(maxY, bounds.maxY);
+        }
+      }
     }
 
     // 如果没有内容，返回默认范围
@@ -699,7 +818,7 @@ export class CanvasEngine {
 
   // ===== 迷你地图 =====
 
-  renderMinimap(minimapCanvas, strokes, images) {
+  renderMinimap(minimapCanvas, strokes, images, texts) {
     const mctx = minimapCanvas.getContext('2d');
     const mw = minimapCanvas.width;
     const mh = minimapCanvas.height;
@@ -708,9 +827,10 @@ export class CanvasEngine {
     mctx.fillStyle = '#fffbeb';
     mctx.fillRect(0, 0, mw, mh);
 
-    if (strokes.length === 0 && images.length === 0) return;
+    const hasTexts = texts && texts.length > 0;
+    if (strokes.length === 0 && images.length === 0 && !hasTexts) return;
 
-    const bounds = this.getContentBounds(strokes, images);
+    const bounds = this.getContentBounds(strokes, images, texts);
     const contentW = bounds.maxX - bounds.minX;
     const contentH = bounds.maxY - bounds.minY;
     if (contentW <= 0 || contentH <= 0) return;

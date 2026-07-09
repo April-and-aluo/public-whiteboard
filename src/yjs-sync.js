@@ -63,6 +63,7 @@ export class YjsSync {
     // 创建共享数据结构
     this.strokes = this.doc.getArray('strokes');
     this.images = this.doc.getArray('images');
+    this.texts = this.doc.getArray('texts');
 
     // 始终启用 BroadcastChannel（同浏览器跨标签页同步）
     this._setupBroadcastChannel();
@@ -83,6 +84,9 @@ export class YjsSync {
     });
     this.images.observe(() => {
       if (this.onDataChange) this.onDataChange('images');
+    });
+    this.texts.observe(() => {
+      if (this.onDataChange) this.onDataChange('texts');
     });
   }
 
@@ -351,6 +355,8 @@ export class YjsSync {
     img.set('h', h);
     img.set('dataUrl', dataUrl);
     img.set('userId', this.userId);
+    img.set('userName', this.userName);
+    img.set('createdAt', Date.now());
     img.set('id', this._generateId());
     img.set('rotation', rotation);
     img.set('opacity', opacity);
@@ -423,9 +429,90 @@ export class YjsSync {
         h: img.get('h'),
         dataUrl: img.get('dataUrl'),
         userId: img.get('userId'),
+        userName: img.get('userName') || '未知用户',
+        createdAt: img.get('createdAt') || 0,
         rotation: img.get('rotation') || 0,
         opacity: img.get('opacity') !== undefined ? img.get('opacity') : 1,
         scale: img.get('scale') !== undefined ? img.get('scale') : 1,
+        index: i,
+      });
+    }
+    return result;
+  }
+
+  // ===== 文字操作 =====
+
+  // 添加一段文字
+  addText(x, y, content, fontSize = 24, color = '#422006', rotation = 0, opacity = 1, scale = 1) {
+    if (!this.texts) return;
+    const text = new Y.Map();
+    text.set('x', x);
+    text.set('y', y);
+    text.set('content', content);
+    text.set('fontSize', fontSize);
+    text.set('color', color);
+    text.set('rotation', rotation);
+    text.set('opacity', opacity);
+    text.set('scale', scale);
+    text.set('userId', this.userId);
+    text.set('userName', this.userName);
+    text.set('createdAt', Date.now());
+    text.set('id', this._generateId());
+    this.texts.push([text]);
+    return text.get('id');
+  }
+
+  // 更新文字属性
+  updateTextProps(id, props) {
+    if (!this.texts) return;
+    for (let i = 0; i < this.texts.length; i++) {
+      const text = this.texts.get(i);
+      if (text.get('id') === id) {
+        if (props.x !== undefined) text.set('x', props.x);
+        if (props.y !== undefined) text.set('y', props.y);
+        if (props.content !== undefined) text.set('content', props.content);
+        if (props.fontSize !== undefined) text.set('fontSize', props.fontSize);
+        if (props.color !== undefined) text.set('color', props.color);
+        if (props.rotation !== undefined) text.set('rotation', props.rotation);
+        if (props.opacity !== undefined) text.set('opacity', props.opacity);
+        if (props.scale !== undefined) text.set('scale', props.scale);
+        return;
+      }
+    }
+  }
+
+  // 删除指定文字（通过 ID）
+  removeTextById(id) {
+    if (!this.texts) return false;
+    for (let i = this.texts.length - 1; i >= 0; i--) {
+      const text = this.texts.get(i);
+      if (text.get('id') === id) {
+        this.texts.delete(i, 1);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 获取所有文字
+  getAllTexts() {
+    if (!this.texts) return [];
+    const result = [];
+    for (let i = 0; i < this.texts.length; i++) {
+      const t = this.texts.get(i);
+      result.push({
+        id: t.get('id'),
+        x: t.get('x'),
+        y: t.get('y'),
+        content: t.get('content') || '',
+        fontSize: t.get('fontSize') || 24,
+        color: t.get('color') || '#422006',
+        rotation: t.get('rotation') || 0,
+        opacity: t.get('opacity') !== undefined ? t.get('opacity') : 1,
+        scale: t.get('scale') !== undefined ? t.get('scale') : 1,
+        userId: t.get('userId'),
+        userName: t.get('userName') || '未知用户',
+        createdAt: t.get('createdAt') || 0,
         index: i,
       });
     }
@@ -615,6 +702,7 @@ export class YjsSync {
     }
     this.strokes = null;
     this.images = null;
+    this.texts = null;
   }
 }
 

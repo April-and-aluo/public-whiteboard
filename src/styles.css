@@ -634,6 +634,130 @@ html, body {
   flex-shrink: 0;
 }
 
+/* 放置信息栏 */
+.props-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--paper-dark);
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
+  margin-bottom: 10px;
+  font-family: 'Patrick Hand', cursive;
+  font-size: 14px;
+}
+
+.props-info-user {
+  color: var(--ink);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.props-info-user::before {
+  content: '👤 ';
+}
+
+.props-info-time {
+  color: var(--ink-faded);
+  font-size: 13px;
+}
+
+/* 文字内容编辑 */
+.props-text-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.prop-textarea {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--paper-light);
+  font-family: 'Patrick Hand', 'Caveat', cursive;
+  font-size: 16px;
+  color: var(--ink);
+  resize: vertical;
+  outline: none;
+}
+
+.prop-textarea:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 2px 2px 0 var(--shadow);
+}
+
+/* 文字编辑浮层 */
+.text-editor {
+  position: absolute;
+  z-index: 200;
+  background: var(--paper-light);
+  border: 2.5px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 4px 4px 0 var(--shadow);
+  padding: 10px;
+  min-width: 220px;
+  max-width: 320px;
+}
+
+.text-editor-input {
+  width: 100%;
+  min-height: 50px;
+  padding: 8px 10px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--paper-bg);
+  font-family: 'Patrick Hand', 'Caveat', cursive;
+  font-size: 18px;
+  color: var(--ink);
+  resize: vertical;
+  outline: none;
+}
+
+.text-editor-input:focus {
+  border-color: var(--accent-blue);
+}
+
+.text-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+
+.text-editor-btn {
+  padding: 6px 16px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  font-family: 'Patrick Hand', cursive;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.12s;
+  box-shadow: 2px 2px 0 var(--shadow);
+}
+
+.text-editor-btn.confirm {
+  background: var(--active-bg);
+  color: var(--ink);
+}
+
+.text-editor-btn.confirm:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--shadow);
+}
+
+.text-editor-btn.cancel {
+  background: var(--paper-light);
+  color: var(--ink-faded);
+}
+
+.text-editor-btn.cancel:hover {
+  background: var(--hover-bg);
+}
+
 /* 移动端面板适配 */
 @media (max-width: 767px) {
   .image-props-panel {
@@ -711,6 +835,11 @@ html, body {
   pointer-events: none;
 }
 
+.toolbar.tool-text #pen-options {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 .toolbar.tool-select #pen-options {
   opacity: 0.4;
   pointer-events: none;
@@ -720,6 +849,7 @@ html, body {
 .canvas-area.tool-pen #main-canvas { cursor: crosshair; }
 .canvas-area.tool-eraser #main-canvas { cursor: pointer; }
 .canvas-area.tool-image #main-canvas { cursor: copy; }
+.canvas-area.tool-text #main-canvas { cursor: text; }
 .canvas-area.tool-select #main-canvas { cursor: pointer; }
 .canvas-area.panning #main-canvas { cursor: grab; }
 .canvas-area.panning.active-pan #main-canvas { cursor: grabbing; }
@@ -1009,6 +1139,11 @@ html, body {
   body.layout-mobile-v2 .toolbar.options-collapsed .tool-options-row,
   body.layout-mobile-v2 .toolbar.options-collapsed .tool-options-divider {
     display: none;
+  }
+
+  /* 折叠时不换行，避免多出空白行 */
+  body.layout-mobile-v2 .toolbar.options-collapsed {
+    flex-wrap: nowrap;
   }
 
   /* 展开时选项行换到第二行 */

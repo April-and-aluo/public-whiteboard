@@ -17,6 +17,10 @@ let currentWidth = 4;
 let pendingImageFile = null;
 let pendingImageProps = { scale: 1, rotation: 0, opacity: 1 };
 let selectedImageId = null;
+let selectedTextId = null;
+let selectedType = null; // 'image' | 'text'
+let pendingTextPos = null; // { worldX, worldY, screenX, screenY }
+let editingTextId = null; // 正在编辑的文字 ID（null 表示新建）
 let minimapTimer = null;
 
 // ===== 布局版本管理 =====
@@ -276,7 +280,8 @@ function startApp(userName) {
   // 设置渲染数据源
   engine.setRenderSources(
     () => yjsSync.getAllImages(),
-    () => yjsSync.getAllStrokes()
+    () => yjsSync.getAllStrokes(),
+    () => yjsSync.getAllTexts()
   );
 
   // 连接 Yjs 同步
@@ -300,7 +305,16 @@ function startApp(userName) {
         return true;
       }
     }
-    // 2. 未命中笔画，检测图片（下层）
+    // 2. 检测文字
+    const texts = yjsSync.getAllTexts();
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const t = texts[i];
+      if (hitTestText(worldX, worldY, t)) {
+        yjsSync.removeTextById(t.id);
+        return true;
+      }
+    }
+    // 3. 未命中笔画/文字，检测图片（下层）
     const images = yjsSync.getAllImages();
     for (let i = images.length - 1; i >= 0; i--) {
       const img = images[i];
@@ -340,25 +354,48 @@ function startApp(userName) {
     setTool('pen');
   };
 
-  // 选择模式：点击选中图片
+  // 文字放置：点击画布后弹出编辑器
+  engine.onTextPlace = (worldX, worldY) => {
+    const screen = engine.worldToScreen(worldX, worldY);
+    pendingTextPos = { worldX, worldY, screenX: screen.x, screenY: screen.y };
+    editingTextId = null;
+    showTextEditor(screen.x, screen.y, '');
+  };
+
+  // 选择模式：点击选中图片或文字
   engine.onSelectClick = (worldX, worldY) => {
+    // 优先检测文字（在上层）
+    const texts = yjsSync.getAllTexts();
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const t = texts[i];
+      if (hitTestText(worldX, worldY, t)) {
+        selectedTextId = t.id;
+        selectedImageId = null;
+        selectedType = 'text';
+        engine.selectedImage = null;
+        engine.selectedText = t;
+        engine.requestRender();
+        showImagePropsPanel(null, t);
+        return;
+      }
+    }
+    // 然后检测图片
     const images = yjsSync.getAllImages();
-    let hit = null;
     for (let i = images.length - 1; i >= 0; i--) {
       const img = images[i];
       if (hitTestImage(worldX, worldY, img)) {
-        hit = img;
-        break;
+        selectedImageId = img.id;
+        selectedTextId = null;
+        selectedType = 'image';
+        engine.selectedText = null;
+        engine.selectedImage = img;
+        engine.requestRender();
+        showImagePropsPanel(img, null);
+        return;
       }
     }
-    if (hit) {
-      selectedImageId = hit.id;
-      engine.selectedImage = hit;
-      engine.requestRender();
-      showImagePropsPanel(hit);
-    } else {
-      deselectImage();
-    }
+    // 未命中
+    deselectAll();
   };
 
   // 光标移动 -> 广播
@@ -375,8 +412,46 @@ function startApp(userName) {
     updateMinimap();
   };
 
-  // 数据变化 -> 重新渲染
-  yjsSync.onDataChange = () => {
+  // 数据变化 -> 重新渲染 + 更新选中状态
+  yjsSync.onDataChange = (type) => {
+    // 如果选中的元素数据变化了，更新选中状态
+    if (selectedType === 'image' && selectedImageId) {
+      const imgs = yjsSync.getAllImages();
+      const updated = imgs.find(i => i.id === selectedImageId);
+      if (updated) {
+        engine.selectedImage = updated;
+      }
+    } else if (selectedType === 'text' && selectedTextId) {
+      const texts = yjsSync.getAllTexts();
+      const updated = texts.find(t => t.id === selectedTextId);
+      if (updated) {
+        engine.selectedText = updated;
+        // 同步文字内容到编辑框
+        const textContent = document.getElementById('prop-text-content');
+        if (textContent && document.activeElement !== textContent) {
+          textContent.value = updated.content || '';
+        }
+        // 同步滑块值
+        const scaleSlider = document.getElementById('prop-scale');
+        const rotationSlider = document.getElementById('prop-rotation');
+        const opacitySlider = document.getElementById('prop-opacity');
+        if (document.activeElement !== scaleSlider) {
+          const v = Math.round((updated.scale || 1) * 100);
+          scaleSlider.value = v;
+          document.getElementById('prop-scale-value').textContent = v + '%';
+        }
+        if (document.activeElement !== rotationSlider) {
+          const v = Math.round(updated.rotation || 0);
+          rotationSlider.value = v;
+          document.getElementById('prop-rotation-value').textContent = v + '°';
+        }
+        if (document.activeElement !== opacitySlider) {
+          const v = Math.round((updated.opacity !== undefined ? updated.opacity : 1) * 100);
+          opacitySlider.value = v;
+          document.getElementById('prop-opacity-value').textContent = v + '%';
+        }
+      }
+    }
     engine.requestRender();
     updateMinimap();
   };
@@ -503,6 +578,9 @@ function setupToolbar() {
       const tool = btn.dataset.tool;
       if (tool === 'image') {
         document.getElementById('image-input').click();
+      } else if (tool === 'text') {
+        setTool('text');
+        document.getElementById('text-placement').classList.remove('hidden');
       } else {
         setTool(tool);
       }
@@ -565,9 +643,9 @@ function setupToolbar() {
 
 // 设置当前工具
 function setTool(tool) {
-  // 切换工具时取消图片选择
-  if (tool !== 'select' && selectedImageId) {
-    deselectImage();
+  // 切换工具时取消选择
+  if (tool !== 'select' && (selectedImageId || selectedTextId)) {
+    deselectAll();
   }
   // 切换工具时取消图片放置
   if (tool !== 'image' && pendingImageFile) {
@@ -575,6 +653,10 @@ function setTool(tool) {
     engine.clearPendingImage();
     document.getElementById('image-placement').classList.add('hidden');
     hideImagePropsPanel();
+  }
+  // 切换工具时取消文字放置
+  if (tool !== 'text' && pendingTextPos) {
+    hideTextEditor();
   }
 
   currentTool = tool;
@@ -658,7 +740,6 @@ function hitTestImage(worldX, worldY, img) {
   const cx = img.x + img.w / 2;
   const cy = img.y + img.h / 2;
   const rotation = (img.rotation || 0) * Math.PI / 180;
-  // 将世界坐标点变换到图片本地坐标系
   const dx = worldX - cx;
   const dy = worldY - cy;
   const cos = Math.cos(-rotation);
@@ -668,36 +749,79 @@ function hitTestImage(worldX, worldY, img) {
   return lx >= -dw / 2 && lx <= dw / 2 && ly >= -dh / 2 && ly <= dh / 2;
 }
 
-// ===== 图片属性面板 =====
+// ===== 文字命中检测 =====
 
-function showImagePropsPanel(img) {
+function hitTestText(worldX, worldY, t) {
+  const bounds = engine._getTextBounds(t);
+  if (!bounds) return false;
+  return worldX >= bounds.minX && worldX <= bounds.maxX &&
+         worldY >= bounds.minY && worldY <= bounds.maxY;
+}
+
+// ===== 格式化时间 =====
+
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ===== 属性面板（图片/文字通用）=====
+
+function showImagePropsPanel(img, text) {
   const panel = document.getElementById('image-props-panel');
+  const title = document.getElementById('props-panel-title');
   const scaleSlider = document.getElementById('prop-scale');
   const rotationSlider = document.getElementById('prop-rotation');
   const opacitySlider = document.getElementById('prop-opacity');
   const scaleValue = document.getElementById('prop-scale-value');
   const rotationValue = document.getElementById('prop-rotation-value');
   const opacityValue = document.getElementById('prop-opacity-value');
+  const infoDiv = document.getElementById('props-info');
+  const infoUser = document.getElementById('props-info-user');
+  const infoTime = document.getElementById('props-info-time');
+  const textEditDiv = document.getElementById('props-text-edit');
+  const textContent = document.getElementById('prop-text-content');
 
-  if (img) {
-    // 编辑已放置的图片
-    const scale = Math.round((img.scale || 1) * 100);
-    const rotation = Math.round(img.rotation || 0);
-    const opacity = Math.round((img.opacity !== undefined ? img.opacity : 1) * 100);
+  const item = img || text;
+
+  if (item) {
+    // 选中已放置的元素
+    const scale = Math.round((item.scale || 1) * 100);
+    const rotation = Math.round(item.rotation || 0);
+    const opacity = Math.round((item.opacity !== undefined ? item.opacity : 1) * 100);
     scaleSlider.value = scale;
     rotationSlider.value = rotation;
     opacitySlider.value = opacity;
     scaleValue.textContent = scale + '%';
     rotationValue.textContent = rotation + '°';
     opacityValue.textContent = opacity + '%';
+
+    // 显示放置信息
+    title.textContent = img ? '图片属性' : '文字属性';
+    infoDiv.classList.remove('hidden');
+    infoUser.textContent = item.userName || '未知用户';
+    infoTime.textContent = formatTime(item.createdAt);
+
+    // 文字内容编辑
+    if (text) {
+      textEditDiv.classList.remove('hidden');
+      textContent.value = text.content || '';
+    } else {
+      textEditDiv.classList.add('hidden');
+    }
   } else {
-    // 放置新图片时的默认值
+    // 放置新图片时（无信息）
+    title.textContent = '图片属性';
     scaleSlider.value = 100;
     rotationSlider.value = 0;
     opacitySlider.value = 100;
     scaleValue.textContent = '100%';
     rotationValue.textContent = '0°';
     opacityValue.textContent = '100%';
+    infoDiv.classList.add('hidden');
+    textEditDiv.classList.add('hidden');
   }
 
   panel.classList.remove('hidden');
@@ -707,11 +831,61 @@ function hideImagePropsPanel() {
   document.getElementById('image-props-panel').classList.add('hidden');
 }
 
-function deselectImage() {
+function deselectAll() {
   selectedImageId = null;
+  selectedTextId = null;
+  selectedType = null;
   engine.selectedImage = null;
+  engine.selectedText = null;
   engine.requestRender();
   hideImagePropsPanel();
+}
+
+// ===== 文字编辑浮层 =====
+
+function showTextEditor(screenX, screenY, initialText) {
+  const editor = document.getElementById('text-editor');
+  const input = document.getElementById('text-editor-input');
+  editor.style.left = screenX + 'px';
+  editor.style.top = screenY + 'px';
+  input.value = initialText;
+  editor.classList.remove('hidden');
+  setTimeout(() => input.focus(), 50);
+}
+
+function hideTextEditor() {
+  document.getElementById('text-editor').classList.add('hidden');
+  pendingTextPos = null;
+  editingTextId = null;
+  document.getElementById('text-placement').classList.add('hidden');
+}
+
+function confirmTextEditor() {
+  const input = document.getElementById('text-editor-input');
+  const content = input.value.trim();
+  if (!content) {
+    hideTextEditor();
+    setTool('pen');
+    return;
+  }
+
+  if (editingTextId) {
+    // 编辑已有文字
+    yjsSync.updateTextProps(editingTextId, { content });
+  } else if (pendingTextPos) {
+    // 新建文字
+    yjsSync.addText(
+      pendingTextPos.worldX,
+      pendingTextPos.worldY,
+      content,
+      24,
+      '#422006',
+      0, 1, 1
+    );
+  }
+
+  hideTextEditor();
+  setTool('pen');
 }
 
 function setupImagePropsPanel() {
@@ -722,54 +896,58 @@ function setupImagePropsPanel() {
   const rotationValue = document.getElementById('prop-rotation-value');
   const opacityValue = document.getElementById('prop-opacity-value');
   const closeBtn = document.getElementById('props-panel-close');
+  const textContent = document.getElementById('prop-text-content');
+
+  function updateProp(key, value) {
+    if (selectedType === 'image' && selectedImageId) {
+      yjsSync.updateImageProps(selectedImageId, { [key]: value });
+      if (engine.selectedImage) {
+        engine.selectedImage[key] = value;
+        engine.requestRender();
+      }
+    } else if (selectedType === 'text' && selectedTextId) {
+      yjsSync.updateTextProps(selectedTextId, { [key]: value });
+      if (engine.selectedText) {
+        engine.selectedText[key] = value;
+        engine.requestRender();
+      }
+    } else if (pendingImageFile) {
+      pendingImageProps[key] = value;
+    }
+  }
 
   scaleSlider.addEventListener('input', () => {
     const v = parseInt(scaleSlider.value);
     scaleValue.textContent = v + '%';
-    if (selectedImageId) {
-      yjsSync.updateImageProps(selectedImageId, { scale: v / 100 });
-      if (engine.selectedImage) {
-        engine.selectedImage.scale = v / 100;
-        engine.requestRender();
-      }
-    } else {
-      pendingImageProps.scale = v / 100;
-    }
+    updateProp('scale', v / 100);
   });
 
   rotationSlider.addEventListener('input', () => {
     const v = parseInt(rotationSlider.value);
     rotationValue.textContent = v + '°';
-    if (selectedImageId) {
-      yjsSync.updateImageProps(selectedImageId, { rotation: v });
-      if (engine.selectedImage) {
-        engine.selectedImage.rotation = v;
-        engine.requestRender();
-      }
-    } else {
-      pendingImageProps.rotation = v;
-    }
+    updateProp('rotation', v);
   });
 
   opacitySlider.addEventListener('input', () => {
     const v = parseInt(opacitySlider.value);
     opacityValue.textContent = v + '%';
-    if (selectedImageId) {
-      yjsSync.updateImageProps(selectedImageId, { opacity: v / 100 });
-      if (engine.selectedImage) {
-        engine.selectedImage.opacity = v / 100;
+    updateProp('opacity', v / 100);
+  });
+
+  textContent.addEventListener('input', () => {
+    if (selectedType === 'text' && selectedTextId) {
+      yjsSync.updateTextProps(selectedTextId, { content: textContent.value });
+      if (engine.selectedText) {
+        engine.selectedText.content = textContent.value;
         engine.requestRender();
       }
-    } else {
-      pendingImageProps.opacity = v / 100;
     }
   });
 
   closeBtn.addEventListener('click', () => {
-    if (selectedImageId) {
-      deselectImage();
+    if (selectedImageId || selectedTextId) {
+      deselectAll();
     } else if (pendingImageFile) {
-      // 取消放置
       pendingImageFile = null;
       engine.clearPendingImage();
       document.getElementById('image-placement').classList.add('hidden');
@@ -777,6 +955,22 @@ function setupImagePropsPanel() {
       setTool('pen');
     } else {
       hideImagePropsPanel();
+    }
+  });
+
+  // 文字编辑器按钮
+  document.getElementById('text-editor-confirm').addEventListener('click', confirmTextEditor);
+  document.getElementById('text-editor-cancel').addEventListener('click', () => {
+    hideTextEditor();
+    setTool('pen');
+  });
+  document.getElementById('text-editor-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      confirmTextEditor();
+    } else if (e.key === 'Escape') {
+      hideTextEditor();
+      setTool('pen');
     }
   });
 }
@@ -808,15 +1002,24 @@ function setupKeyboard() {
 
     // Escape: 取消选择或取消放置
     if (e.key === 'Escape') {
-      if (selectedImageId) {
-        deselectImage();
+      if (selectedImageId || selectedTextId) {
+        deselectAll();
       } else if (pendingImageFile) {
         pendingImageFile = null;
         engine.clearPendingImage();
         document.getElementById('image-placement').classList.add('hidden');
         hideImagePropsPanel();
         setTool('pen');
+      } else if (pendingTextPos) {
+        hideTextEditor();
+        setTool('pen');
       }
+    }
+
+    // 快捷键: t -> 文字工具
+    if (e.key === 't' || e.key === 'T') {
+      setTool('text');
+      document.getElementById('text-placement').classList.remove('hidden');
     }
   });
 
@@ -892,7 +1095,8 @@ function updateMinimap() {
     if (!minimapCanvas) return;
     const strokes = yjsSync.getAllStrokes();
     const images = yjsSync.getAllImages();
-    engine.renderMinimap(minimapCanvas, strokes, images);
+    const texts = yjsSync.getAllTexts();
+    engine.renderMinimap(minimapCanvas, strokes, images, texts);
   }, 200);
 }
 

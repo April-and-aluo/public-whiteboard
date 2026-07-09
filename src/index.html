@@ -131,7 +131,14 @@
             <path d="M21 15l-5-5L5 21"/>
           </svg>
         </button>
-        <button class="tool-btn" data-tool="select" title="选择/编辑图片">
+        <button class="tool-btn" data-tool="text" title="文字">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 7 4 4 20 4 20 7"/>
+            <line x1="9" y1="20" x2="15" y2="20"/>
+            <line x1="12" y1="4" x2="12" y2="20"/>
+          </svg>
+        </button>
+        <button class="tool-btn" data-tool="select" title="选择/编辑">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/>
           </svg>
@@ -198,13 +205,37 @@
       <div class="placement-hint">点击画布放置图片</div>
     </div>
 
-    <!-- 图片属性调节面板 -->
+    <!-- 文字放置提示 -->
+    <div id="text-placement" class="image-placement hidden">
+      <div class="placement-hint">点击画布添加文字</div>
+    </div>
+
+    <!-- 文字编辑浮层 -->
+    <div id="text-editor" class="text-editor hidden">
+      <textarea id="text-editor-input" class="text-editor-input" placeholder="输入文字..." rows="2"></textarea>
+      <div class="text-editor-actions">
+        <button id="text-editor-confirm" class="text-editor-btn confirm">确认</button>
+        <button id="text-editor-cancel" class="text-editor-btn cancel">取消</button>
+      </div>
+    </div>
+
+    <!-- 属性调节面板（图片/文字通用） -->
     <div id="image-props-panel" class="image-props-panel hidden">
       <div class="props-panel-header">
-        <span class="props-panel-title">图片属性</span>
+        <span class="props-panel-title" id="props-panel-title">属性</span>
         <button id="props-panel-close" class="props-panel-close" title="关闭">&times;</button>
       </div>
       <div class="props-panel-body">
+        <!-- 放置信息（仅选中已放置元素时显示） -->
+        <div id="props-info" class="props-info hidden">
+          <span class="props-info-user" id="props-info-user"></span>
+          <span class="props-info-time" id="props-info-time"></span>
+        </div>
+        <!-- 文字内容编辑（仅文字选中时显示） -->
+        <div id="props-text-edit" class="props-text-edit hidden">
+          <label class="prop-label">文字</label>
+          <textarea id="prop-text-content" class="prop-textarea" rows="2" placeholder="编辑文字..."></textarea>
+        </div>
         <div class="prop-row">
           <label class="prop-label">大小</label>
           <input type="range" id="prop-scale" class="prop-slider" min="10" max="500" value="100" step="1">

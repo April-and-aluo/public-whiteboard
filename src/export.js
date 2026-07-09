@@ -14,14 +14,15 @@ export class ExportManager {
   exportAll() {
     const strokes = this.yjs.getAllStrokes();
     const images = this.yjs.getAllImages();
+    const texts = this.yjs.getAllTexts();
 
-    if (strokes.length === 0 && images.length === 0) {
+    if (strokes.length === 0 && images.length === 0 && texts.length === 0) {
       alert('画板是空的，先画点什么吧！');
       return;
     }
 
     // 计算内容边界
-    const bounds = this.engine.getContentBounds(strokes, images);
+    const bounds = this.engine.getContentBounds(strokes, images, texts);
     const contentW = bounds.maxX - bounds.minX;
     const contentH = bounds.maxY - bounds.minY;
 
@@ -62,6 +63,11 @@ export class ExportManager {
       if (imageObj.complete && imageObj.naturalWidth > 0) {
         this.engine._drawImage(ctx, img);
       }
+    }
+
+    // 绘制文字
+    for (const t of texts) {
+      this.engine._drawText(ctx, t);
     }
 
     // 绘制笔画
