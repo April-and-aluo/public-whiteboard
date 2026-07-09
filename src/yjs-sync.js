@@ -159,7 +159,6 @@ export class YjsSync {
     try {
       this.provider = new WebsocketProvider(WS_URL, this.roomId, this.doc, {
         connect: true,
-        awareness: true,
       });
 
       let wsConnected = false;
