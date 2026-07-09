@@ -1,0 +1,17 @@
+{
+  "name": "whiteboard-server",
+  "version": "1.0.0",
+  "description": "公共展示板 WebSocket 服务器",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

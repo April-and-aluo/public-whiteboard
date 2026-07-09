@@ -1,0 +1,27 @@
+# Fly.io 部署配置
+# 免费层：3个 shared-cpu-1x VM（256MB RAM），不休眠
+# 需要注册 fly.io 并安装 flyctl
+app = "whiteboard-server"
+primary_region = "nrt"  # 东京区域，亚洲延迟最低
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false  # 不自动停止，保持常驻
+  auto_start_machines = true
+  min_machines_running = 1    # 至少保持1个实例运行
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
+
+[vm]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

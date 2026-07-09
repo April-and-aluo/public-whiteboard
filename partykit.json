@@ -1,0 +1,9 @@
+{
+  "name": "public-whiteboard",
+  "main": "server/partykit.ts",
+  "compatibilityDate": "2024-01-01",
+  "assets": {
+    "directory": "./src",
+    "notFoundHandler": "index.html"
+  }
+}
