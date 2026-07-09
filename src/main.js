@@ -356,11 +356,15 @@ function startApp(userName) {
     setTool('pen');
   };
 
-  // 文字放置：点击画布后弹出编辑器
+  // 文字放置：点击画布后立即创建文字元素并显示实时输入框
   engine.onTextPlace = (worldX, worldY) => {
     const screen = engine.worldToScreen(worldX, worldY);
+    // 立即在 Yjs 中创建空文字元素，用户输入实时更新到画布
+    const textId = yjsSync.addText(
+      worldX, worldY, '', 24, '#422006', 0, 1, 1
+    );
     pendingTextPos = { worldX, worldY, screenX: screen.x, screenY: screen.y };
-    editingTextId = null;
+    editingTextId = textId;
     showTextEditor(screen.x, screen.y, '');
   };
 
@@ -416,7 +420,7 @@ function startApp(userName) {
     }
   };
 
-  // 拖拽移动
+  // 拖拽移动 - 立即更新本地并同步渲染，保证拖拽连续
   engine.onDragMove = (itemType, deltaX, deltaY) => {
     if (itemType === 'image' && selectedImageId) {
       const imgs = yjsSync.getAllImages();
@@ -426,6 +430,9 @@ function startApp(userName) {
           x: img.x + deltaX,
           y: img.y + deltaY,
         });
+        // 立即更新本地选中对象并同步渲染（不等待异步 onDataChange）
+        engine.selectedImage = yjsSync.getAllImages().find(i => i.id === selectedImageId);
+        engine.render();
       }
     } else if (itemType === 'text' && selectedTextId) {
       const texts = yjsSync.getAllTexts();
@@ -435,6 +442,9 @@ function startApp(userName) {
           x: t.x + deltaX,
           y: t.y + deltaY,
         });
+        // 立即更新本地选中对象并同步渲染
+        engine.selectedText = yjsSync.getAllTexts().find(tt => tt.id === selectedTextId);
+        engine.render();
       }
     }
   };
@@ -723,6 +733,14 @@ function setTool(tool) {
   if (tool !== 'text') {
     document.getElementById('text-placement').classList.add('hidden');
     document.getElementById('text-editor').classList.add('hidden');
+    // 如果正在创建文字但切换了工具，删除已创建的空文字元素
+    if (editingTextId && pendingTextPos) {
+      const texts = yjsSync.getAllTexts();
+      const t = texts.find(tt => tt.id === editingTextId);
+      if (t && (!t.content || t.content.trim() === '')) {
+        yjsSync.removeTextById(editingTextId);
+      }
+    }
     pendingTextPos = null;
     editingTextId = null;
   }
@@ -936,17 +954,17 @@ function hideTextEditor() {
 function confirmTextEditor() {
   const input = document.getElementById('text-editor-input');
   const content = input.value.trim();
-  if (!content) {
-    hideTextEditor();
-    setTool('pen');
-    return;
-  }
 
   if (editingTextId) {
-    // 编辑已有文字
-    yjsSync.updateTextProps(editingTextId, { content });
-  } else if (pendingTextPos) {
-    // 新建文字
+    if (content) {
+      // 更新文字内容（已有元素，之前已实时创建）
+      yjsSync.updateTextProps(editingTextId, { content });
+    } else {
+      // 内容为空，删除已创建的文字元素
+      yjsSync.removeTextById(editingTextId);
+    }
+  } else if (pendingTextPos && content) {
+    // 后备路径：如果因某种原因文字元素未提前创建
     yjsSync.addText(
       pendingTextPos.worldX,
       pendingTextPos.worldY,
@@ -1034,6 +1052,10 @@ function setupImagePropsPanel() {
   // 文字编辑器按钮
   document.getElementById('text-editor-confirm').addEventListener('click', confirmTextEditor);
   document.getElementById('text-editor-cancel').addEventListener('click', () => {
+    // 取消时删除已创建的空文字元素
+    if (editingTextId) {
+      yjsSync.removeTextById(editingTextId);
+    }
     hideTextEditor();
     setTool('pen');
   });
@@ -1042,8 +1064,18 @@ function setupImagePropsPanel() {
       e.preventDefault();
       confirmTextEditor();
     } else if (e.key === 'Escape') {
+      // ESC 取消时删除已创建的空文字元素
+      if (editingTextId) {
+        yjsSync.removeTextById(editingTextId);
+      }
       hideTextEditor();
       setTool('pen');
+    }
+  });
+  // 实时输入同步：用户每输入一个字符，立即更新画布上的文字
+  document.getElementById('text-editor-input').addEventListener('input', (e) => {
+    if (editingTextId) {
+      yjsSync.updateTextProps(editingTextId, { content: e.target.value });
     }
   });
 }
@@ -1083,7 +1115,14 @@ function setupKeyboard() {
         document.getElementById('image-placement').classList.add('hidden');
         hideImagePropsPanel();
         setTool('pen');
-      } else if (pendingTextPos) {
+      } else if (pendingTextPos || editingTextId) {
+        if (editingTextId) {
+          const texts = yjsSync.getAllTexts();
+          const t = texts.find(tt => tt.id === editingTextId);
+          if (t && (!t.content || t.content.trim() === '')) {
+            yjsSync.removeTextById(editingTextId);
+          }
+        }
         hideTextEditor();
         setTool('pen');
       }

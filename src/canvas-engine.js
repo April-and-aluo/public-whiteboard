@@ -53,6 +53,9 @@ export class CanvasEngine {
     this.draggedType = null; // 'image' | 'text'
     this.dragMoved = false;
 
+    // 光标同步节流
+    this._lastCursorSync = 0;
+
     // 回调函数
     this.onStrokeStart = null;
     this.onStrokeMove = null;
@@ -249,9 +252,13 @@ export class CanvasEngine {
 
     const world = this.screenToWorld(point.x, point.y);
 
-    // 光标位置广播
+    // 光标位置广播（节流：最多每 50ms 发送一次，避免阻塞渲染）
     if (this.onCursorMove) {
-      this.onCursorMove(world.x, world.y);
+      const now = Date.now();
+      if (!this._lastCursorSync || now - this._lastCursorSync > 50) {
+        this._lastCursorSync = now;
+        this.onCursorMove(world.x, world.y);
+      }
     }
 
     // 绘画中
