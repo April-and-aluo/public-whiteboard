@@ -131,6 +131,11 @@
             <path d="M21 15l-5-5L5 21"/>
           </svg>
         </button>
+        <button class="tool-btn" data-tool="select" title="选择/编辑图片">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/>
+          </svg>
+        </button>
         <input type="file" id="image-input" accept="image/*" class="hidden-file-input">
       </div>
 
@@ -191,6 +196,31 @@
     <!-- 图片放置提示 -->
     <div id="image-placement" class="image-placement hidden">
       <div class="placement-hint">点击画布放置图片</div>
+    </div>
+
+    <!-- 图片属性调节面板 -->
+    <div id="image-props-panel" class="image-props-panel hidden">
+      <div class="props-panel-header">
+        <span class="props-panel-title">图片属性</span>
+        <button id="props-panel-close" class="props-panel-close" title="关闭">&times;</button>
+      </div>
+      <div class="props-panel-body">
+        <div class="prop-row">
+          <label class="prop-label">大小</label>
+          <input type="range" id="prop-scale" class="prop-slider" min="10" max="500" value="100" step="1">
+          <span class="prop-value" id="prop-scale-value">100%</span>
+        </div>
+        <div class="prop-row">
+          <label class="prop-label">角度</label>
+          <input type="range" id="prop-rotation" class="prop-slider" min="-180" max="180" value="0" step="1">
+          <span class="prop-value" id="prop-rotation-value">0°</span>
+        </div>
+        <div class="prop-row">
+          <label class="prop-label">透明度</label>
+          <input type="range" id="prop-opacity" class="prop-slider" min="10" max="100" value="100" step="1">
+          <span class="prop-value" id="prop-opacity-value">100%</span>
+        </div>
+      </div>
     </div>
   </div>
 

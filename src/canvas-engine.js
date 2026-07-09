@@ -53,8 +53,10 @@ export class CanvasEngine {
     this.onStrokeEnd = null;
     this.onErase = null; // (worldX, worldY) => boolean(是否命中删除)
     this.onImagePlace = null; // (worldX, worldY) => void
+    this.onSelectClick = null; // (worldX, worldY) => void
     this.onCursorMove = null; // (worldX, worldY) => void
     this.onViewportChange = null;
+    this.selectedImage = null; // 当前选中的图片对象（用于高亮显示）
 
     this._setupCanvas();
     this._setupEventListeners();
@@ -164,6 +166,8 @@ export class CanvasEngine {
       this._eraseAt(world.x, world.y);
     } else if (tool === 'image' && this.pendingImage) {
       this._placeImage(world.x, world.y);
+    } else if (tool === 'select') {
+      if (this.onSelectClick) this.onSelectClick(world.x, world.y);
     }
   }
 
@@ -424,6 +428,33 @@ export class CanvasEngine {
       this._drawStroke(ctx, this.currentStroke);
     }
 
+    // 绘制选中图片的高亮边框
+    if (this.selectedImage) {
+      const img = this.selectedImage;
+      const scale = img.scale !== undefined ? img.scale : 1;
+      const dw = img.w * scale;
+      const dh = img.h * scale;
+      const cx = img.x + img.w / 2;
+      const cy = img.y + img.h / 2;
+      const rotation = (img.rotation || 0) * Math.PI / 180;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rotation);
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2 / this.scale;
+      ctx.setLineDash([8 / this.scale, 4 / this.scale]);
+      ctx.strokeRect(-dw / 2 - 4, -dh / 2 - 4, dw + 8, dh + 8);
+      ctx.setLineDash([]);
+      // 四角标记
+      const corners = [[-dw/2-4, -dh/2-4], [dw/2+4, -dh/2-4], [dw/2+4, dh/2+4], [-dw/2-4, dh/2+4]];
+      ctx.fillStyle = '#3b82f6';
+      for (const [x, y] of corners) {
+        ctx.fillRect(x - 3, y - 3, 6, 6);
+      }
+      ctx.restore();
+    }
+
     ctx.restore();
   }
 
@@ -478,8 +509,16 @@ export class CanvasEngine {
     };
   }
 
-  // 绘制图片
+  // 绘制图片（支持旋转、透明度、缩放）
   _drawImage(ctx, img) {
+    const rotation = img.rotation || 0;
+    const opacity = img.opacity !== undefined ? img.opacity : 1;
+    const scale = img.scale !== undefined ? img.scale : 1;
+    const dw = img.w * scale;
+    const dh = img.h * scale;
+    const cx = img.x + img.w / 2;
+    const cy = img.y + img.h / 2;
+
     let imageObj = this.imageCache.get(img.id);
     if (!imageObj) {
       imageObj = new Image();
@@ -487,18 +526,28 @@ export class CanvasEngine {
       imageObj.src = img.dataUrl;
       this.imageCache.set(img.id, imageObj);
       // 图片还在加载，先画占位框
+      ctx.save();
+      ctx.globalAlpha = opacity;
+      ctx.translate(cx, cy);
+      ctx.rotate(rotation * Math.PI / 180);
       ctx.fillStyle = 'rgba(254, 243, 199, 0.5)';
-      ctx.fillRect(img.x, img.y, img.w, img.h);
+      ctx.fillRect(-dw / 2, -dh / 2, dw, dh);
       ctx.strokeStyle = '#422006';
       ctx.lineWidth = 2 / this.scale;
       ctx.setLineDash([6 / this.scale, 4 / this.scale]);
-      ctx.strokeRect(img.x, img.y, img.w, img.h);
+      ctx.strokeRect(-dw / 2, -dh / 2, dw, dh);
       ctx.setLineDash([]);
+      ctx.restore();
       return;
     }
 
     if (imageObj.complete && imageObj.naturalWidth > 0) {
-      ctx.drawImage(imageObj, img.x, img.y, img.w, img.h);
+      ctx.save();
+      ctx.globalAlpha = opacity;
+      ctx.translate(cx, cy);
+      ctx.rotate(rotation * Math.PI / 180);
+      ctx.drawImage(imageObj, -dw / 2, -dh / 2, dw, dh);
+      ctx.restore();
     }
   }
 
@@ -585,10 +634,19 @@ export class CanvasEngine {
     }
 
     for (const img of images) {
-      minX = Math.min(minX, img.x);
-      minY = Math.min(minY, img.y);
-      maxX = Math.max(maxX, img.x + img.w);
-      maxY = Math.max(maxY, img.y + img.h);
+      const scale = img.scale !== undefined ? img.scale : 1;
+      const dw = img.w * scale;
+      const dh = img.h * scale;
+      const rotation = (img.rotation || 0) * Math.PI / 180;
+      const cx = img.x + img.w / 2;
+      const cy = img.y + img.h / 2;
+      // 旋转后的边界框
+      const bw = Math.abs(dw * Math.cos(rotation)) + Math.abs(dh * Math.sin(rotation));
+      const bh = Math.abs(dw * Math.sin(rotation)) + Math.abs(dh * Math.cos(rotation));
+      minX = Math.min(minX, cx - bw / 2);
+      minY = Math.min(minY, cy - bh / 2);
+      maxX = Math.max(maxX, cx + bw / 2);
+      maxY = Math.max(maxY, cy + bh / 2);
     }
 
     // 如果没有内容，返回默认范围
@@ -627,7 +685,7 @@ export class CanvasEngine {
         this.imageCache.set(img.id, imageObj);
       }
       if (imageObj.complete && imageObj.naturalWidth > 0) {
-        ctx.drawImage(imageObj, img.x, img.y, img.w, img.h);
+        this._drawImage(ctx, img);
       }
     }
 

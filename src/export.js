@@ -60,7 +60,7 @@ export class ExportManager {
         this.engine.imageCache.set(img.id, imageObj);
       }
       if (imageObj.complete && imageObj.naturalWidth > 0) {
-        ctx.drawImage(imageObj, img.x, img.y, img.w, img.h);
+        this.engine._drawImage(ctx, img);
       }
     }
 

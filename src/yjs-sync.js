@@ -319,7 +319,7 @@ export class YjsSync {
   // ===== 图片操作 =====
 
   // 添加一张图片
-  addImage(x, y, w, h, dataUrl) {
+  addImage(x, y, w, h, dataUrl, rotation = 0, opacity = 1, scale = 1) {
     if (!this.images) return;
     const img = new Y.Map();
     img.set('x', x);
@@ -329,8 +329,29 @@ export class YjsSync {
     img.set('dataUrl', dataUrl);
     img.set('userId', this.userId);
     img.set('id', this._generateId());
+    img.set('rotation', rotation);
+    img.set('opacity', opacity);
+    img.set('scale', scale);
     this.images.push([img]);
     return img.get('id');
+  }
+
+  // 更新图片属性（大小、角度、透明度等）
+  updateImageProps(id, props) {
+    if (!this.images) return;
+    for (let i = 0; i < this.images.length; i++) {
+      const img = this.images.get(i);
+      if (img.get('id') === id) {
+        if (props.x !== undefined) img.set('x', props.x);
+        if (props.y !== undefined) img.set('y', props.y);
+        if (props.w !== undefined) img.set('w', props.w);
+        if (props.h !== undefined) img.set('h', props.h);
+        if (props.rotation !== undefined) img.set('rotation', props.rotation);
+        if (props.opacity !== undefined) img.set('opacity', props.opacity);
+        if (props.scale !== undefined) img.set('scale', props.scale);
+        return;
+      }
+    }
   }
 
   // 删除指定图片（通过索引）
@@ -379,6 +400,9 @@ export class YjsSync {
         h: img.get('h'),
         dataUrl: img.get('dataUrl'),
         userId: img.get('userId'),
+        rotation: img.get('rotation') || 0,
+        opacity: img.get('opacity') !== undefined ? img.get('opacity') : 1,
+        scale: img.get('scale') !== undefined ? img.get('scale') : 1,
         index: i,
       });
     }

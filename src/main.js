@@ -15,6 +15,8 @@ let currentTool = 'pen';
 let currentColor = '#1e3a5f';
 let currentWidth = 4;
 let pendingImageFile = null;
+let pendingImageProps = { scale: 1, rotation: 0, opacity: 1 };
+let selectedImageId = null;
 let minimapTimer = null;
 
 // ===== 布局版本管理 =====
@@ -302,8 +304,7 @@ function startApp(userName) {
     const images = yjsSync.getAllImages();
     for (let i = images.length - 1; i >= 0; i--) {
       const img = images[i];
-      if (worldX >= img.x && worldX <= img.x + img.w &&
-          worldY >= img.y && worldY <= img.y + img.h) {
+      if (hitTestImage(worldX, worldY, img)) {
         yjsSync.removeImageById(img.id);
         return true;
       }
@@ -325,12 +326,39 @@ function startApp(userName) {
       h = Math.round(h * ratio);
     }
 
-    yjsSync.addImage(worldX - w / 2, worldY - h / 2, w, h, dataUrl);
+    yjsSync.addImage(
+      worldX - w / 2, worldY - h / 2, w, h, dataUrl,
+      pendingImageProps.rotation,
+      pendingImageProps.opacity,
+      pendingImageProps.scale
+    );
 
     pendingImageFile = null;
     engine.clearPendingImage();
     document.getElementById('image-placement').classList.add('hidden');
+    hideImagePropsPanel();
     setTool('pen');
+  };
+
+  // 选择模式：点击选中图片
+  engine.onSelectClick = (worldX, worldY) => {
+    const images = yjsSync.getAllImages();
+    let hit = null;
+    for (let i = images.length - 1; i >= 0; i--) {
+      const img = images[i];
+      if (hitTestImage(worldX, worldY, img)) {
+        hit = img;
+        break;
+      }
+    }
+    if (hit) {
+      selectedImageId = hit.id;
+      engine.selectedImage = hit;
+      engine.requestRender();
+      showImagePropsPanel(hit);
+    } else {
+      deselectImage();
+    }
   };
 
   // 光标移动 -> 广播
@@ -387,6 +415,7 @@ function startApp(userName) {
   setupKeyboard();
   setupResponsive();
   setupUserListToggle();
+  setupImagePropsPanel();
 
   // 进入画板后检查公告
   checkAnnouncement();
@@ -527,6 +556,18 @@ function setupToolbar() {
 
 // 设置当前工具
 function setTool(tool) {
+  // 切换工具时取消图片选择
+  if (tool !== 'select' && selectedImageId) {
+    deselectImage();
+  }
+  // 切换工具时取消图片放置
+  if (tool !== 'image' && pendingImageFile) {
+    pendingImageFile = null;
+    engine.clearPendingImage();
+    document.getElementById('image-placement').classList.add('hidden');
+    hideImagePropsPanel();
+  }
+
   currentTool = tool;
   engine.setTool(tool);
 
@@ -590,10 +631,145 @@ function handleImageUpload(file) {
       engine.setPendingImage(dataUrl, img.naturalWidth, img.naturalHeight);
       setTool('image');
       document.getElementById('image-placement').classList.remove('hidden');
+      // 重置属性并显示调节面板
+      pendingImageProps = { scale: 1, rotation: 0, opacity: 1 };
+      showImagePropsPanel(null);
     };
     img.src = e.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+// ===== 图片命中检测（支持旋转和缩放）=====
+
+function hitTestImage(worldX, worldY, img) {
+  const scale = img.scale !== undefined ? img.scale : 1;
+  const dw = img.w * scale;
+  const dh = img.h * scale;
+  const cx = img.x + img.w / 2;
+  const cy = img.y + img.h / 2;
+  const rotation = (img.rotation || 0) * Math.PI / 180;
+  // 将世界坐标点变换到图片本地坐标系
+  const dx = worldX - cx;
+  const dy = worldY - cy;
+  const cos = Math.cos(-rotation);
+  const sin = Math.sin(-rotation);
+  const lx = dx * cos - dy * sin;
+  const ly = dx * sin + dy * cos;
+  return lx >= -dw / 2 && lx <= dw / 2 && ly >= -dh / 2 && ly <= dh / 2;
+}
+
+// ===== 图片属性面板 =====
+
+function showImagePropsPanel(img) {
+  const panel = document.getElementById('image-props-panel');
+  const scaleSlider = document.getElementById('prop-scale');
+  const rotationSlider = document.getElementById('prop-rotation');
+  const opacitySlider = document.getElementById('prop-opacity');
+  const scaleValue = document.getElementById('prop-scale-value');
+  const rotationValue = document.getElementById('prop-rotation-value');
+  const opacityValue = document.getElementById('prop-opacity-value');
+
+  if (img) {
+    // 编辑已放置的图片
+    const scale = Math.round((img.scale || 1) * 100);
+    const rotation = Math.round(img.rotation || 0);
+    const opacity = Math.round((img.opacity !== undefined ? img.opacity : 1) * 100);
+    scaleSlider.value = scale;
+    rotationSlider.value = rotation;
+    opacitySlider.value = opacity;
+    scaleValue.textContent = scale + '%';
+    rotationValue.textContent = rotation + '°';
+    opacityValue.textContent = opacity + '%';
+  } else {
+    // 放置新图片时的默认值
+    scaleSlider.value = 100;
+    rotationSlider.value = 0;
+    opacitySlider.value = 100;
+    scaleValue.textContent = '100%';
+    rotationValue.textContent = '0°';
+    opacityValue.textContent = '100%';
+  }
+
+  panel.classList.remove('hidden');
+}
+
+function hideImagePropsPanel() {
+  document.getElementById('image-props-panel').classList.add('hidden');
+}
+
+function deselectImage() {
+  selectedImageId = null;
+  engine.selectedImage = null;
+  engine.requestRender();
+  hideImagePropsPanel();
+}
+
+function setupImagePropsPanel() {
+  const scaleSlider = document.getElementById('prop-scale');
+  const rotationSlider = document.getElementById('prop-rotation');
+  const opacitySlider = document.getElementById('prop-opacity');
+  const scaleValue = document.getElementById('prop-scale-value');
+  const rotationValue = document.getElementById('prop-rotation-value');
+  const opacityValue = document.getElementById('prop-opacity-value');
+  const closeBtn = document.getElementById('props-panel-close');
+
+  scaleSlider.addEventListener('input', () => {
+    const v = parseInt(scaleSlider.value);
+    scaleValue.textContent = v + '%';
+    if (selectedImageId) {
+      yjsSync.updateImageProps(selectedImageId, { scale: v / 100 });
+      if (engine.selectedImage) {
+        engine.selectedImage.scale = v / 100;
+        engine.requestRender();
+      }
+    } else {
+      pendingImageProps.scale = v / 100;
+    }
+  });
+
+  rotationSlider.addEventListener('input', () => {
+    const v = parseInt(rotationSlider.value);
+    rotationValue.textContent = v + '°';
+    if (selectedImageId) {
+      yjsSync.updateImageProps(selectedImageId, { rotation: v });
+      if (engine.selectedImage) {
+        engine.selectedImage.rotation = v;
+        engine.requestRender();
+      }
+    } else {
+      pendingImageProps.rotation = v;
+    }
+  });
+
+  opacitySlider.addEventListener('input', () => {
+    const v = parseInt(opacitySlider.value);
+    opacityValue.textContent = v + '%';
+    if (selectedImageId) {
+      yjsSync.updateImageProps(selectedImageId, { opacity: v / 100 });
+      if (engine.selectedImage) {
+        engine.selectedImage.opacity = v / 100;
+        engine.requestRender();
+      }
+    } else {
+      pendingImageProps.opacity = v / 100;
+    }
+  });
+
+  closeBtn.addEventListener('click', () => {
+    if (selectedImageId) {
+      deselectImage();
+    } else if (pendingImageFile) {
+      // 取消放置
+      pendingImageFile = null;
+      engine.clearPendingImage();
+      document.getElementById('image-placement').classList.add('hidden');
+      hideImagePropsPanel();
+      setTool('pen');
+    } else {
+      hideImagePropsPanel();
+    }
+  });
 }
 
 // ===== 键盘快捷键 =====
@@ -619,6 +795,19 @@ function setupKeyboard() {
 
     if (e.key === 'e' || e.key === 'E') {
       setTool('eraser');
+    }
+
+    // Escape: 取消选择或取消放置
+    if (e.key === 'Escape') {
+      if (selectedImageId) {
+        deselectImage();
+      } else if (pendingImageFile) {
+        pendingImageFile = null;
+        engine.clearPendingImage();
+        document.getElementById('image-placement').classList.add('hidden');
+        hideImagePropsPanel();
+        setTool('pen');
+      }
     }
   });
 
