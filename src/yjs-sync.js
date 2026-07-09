@@ -91,9 +91,14 @@ export class YjsSync {
         awareness: true,
       });
 
+      let wsConnected = false;
+
       // 连接状态监听
       this.provider.on('status', (event) => {
         this.connectionState = event.status; // 'connected' | 'disconnected'
+        if (event.status === 'connected') {
+          wsConnected = true;
+        }
         this._notifyConnectionChange();
       });
 
@@ -113,6 +118,17 @@ export class YjsSync {
 
       this.connectionState = 'connecting';
       console.log('[Yjs] WebSocket 模式连接中:', WS_URL);
+
+      // 3秒后检查是否连接成功，未成功则回退到 WebRTC
+      setTimeout(() => {
+        if (!wsConnected && this.connectionState !== 'connected') {
+          console.warn('[Yjs] WebSocket 连接超时，回退到 WebRTC P2P 模式');
+          try { this.provider.destroy(); } catch(e) {}
+          this.provider = null;
+          this._connectWebRTC();
+        }
+      }, 3000);
+
     } catch (err) {
       console.warn('[Yjs] WebSocket 连接失败，回退到 WebRTC:', err);
       this._connectWebRTC();
