@@ -561,43 +561,46 @@ function updateUserList(users) {
   const onlineCount = document.getElementById('online-count');
   const dropdownList = document.getElementById('user-dropdown-list');
 
-  onlineCount.textContent = `${users.length} 人在线`;
+  // 过滤掉没有 name 的无效用户
+  const validUsers = users.filter(u => u && u.name);
+
+  onlineCount.textContent = `${validUsers.length} 人在线`;
 
   // 头像列表
   userList.innerHTML = '';
-  const displayUsers = users.slice(0, 8);
+  const displayUsers = validUsers.slice(0, 8);
   for (const user of displayUsers) {
     const avatar = document.createElement('div');
     avatar.className = 'user-avatar';
-    avatar.style.background = user.color;
-    avatar.textContent = user.name.charAt(0).toUpperCase();
-    avatar.title = user.name;
+    avatar.style.background = user.color || '#92400e';
+    avatar.textContent = (user.name || '?').charAt(0).toUpperCase();
+    avatar.title = user.name || '未知用户';
     userList.appendChild(avatar);
   }
 
-  if (users.length > 8) {
+  if (validUsers.length > 8) {
     const more = document.createElement('div');
     more.className = 'user-avatar';
     more.style.background = '#92400e';
-    more.textContent = `+${users.length - 8}`;
+    more.textContent = `+${validUsers.length - 8}`;
     userList.appendChild(more);
   }
 
   // 下拉面板完整列表
   if (dropdownList) {
     dropdownList.innerHTML = '';
-    for (const user of users) {
+    for (const user of validUsers) {
       const item = document.createElement('div');
       item.className = 'user-dropdown-item';
 
       const avatar = document.createElement('div');
       avatar.className = 'user-avatar';
-      avatar.style.background = user.color;
-      avatar.textContent = user.name.charAt(0).toUpperCase();
+      avatar.style.background = user.color || '#92400e';
+      avatar.textContent = (user.name || '?').charAt(0).toUpperCase();
 
       const name = document.createElement('span');
       name.className = 'user-dropdown-name';
-      name.textContent = user.name;
+      name.textContent = user.name || '未知用户';
 
       item.appendChild(avatar);
       item.appendChild(name);
