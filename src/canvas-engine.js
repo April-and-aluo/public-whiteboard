@@ -201,11 +201,16 @@ export class CanvasEngine {
         this.dragMoved = false;
         return;
       }
-      // 3. 记住之前是否有选中
+      // 3. 编辑模式下（属性面板打开时），点击空白区域直接平移视角，不取消选择
+      if (this.isEditMode) {
+        this._startPan(point.x, point.y);
+        return;
+      }
+      // 4. 记住之前是否有选中
       const hadSelection = !!(this.selectedImage || this.selectedText);
-      // 4. 检查是否点击了某个元素（选中它）
+      // 5. 检查是否点击了某个元素（选中它）
       if (this.onSelectClick) this.onSelectClick(world.x, world.y);
-      // 5. 如果之前没有选中、点击后也没有选中 -> 开始平移
+      // 6. 如果之前没有选中、点击后也没有选中 -> 开始平移
       //    如果之前有选中但现在取消选中 -> 仅取消选中，不平移
       if (!hadSelection && !this.selectedImage && !this.selectedText) {
         this._startPan(point.x, point.y);
