@@ -105,6 +105,16 @@
     <main class="canvas-area">
       <canvas id="main-canvas"></canvas>
       <canvas id="cursor-canvas"></canvas>
+      <!-- 屏幕边缘标记其他用户 -->
+      <div id="edge-markers" class="edge-markers"></div>
+      <!-- 返回原位按钮 -->
+      <button id="return-btn" class="return-btn hidden" title="返回原位">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1015-6.7L21 9"/>
+          <path d="M21 3v6h-6"/>
+        </svg>
+        <span>返回原位</span>
+      </button>
     </main>
 
     <!-- 工具栏 -->
@@ -196,8 +206,11 @@
     </div>
 
     <!-- 迷你导航地图 -->
-    <div id="minimap" class="minimap hidden">
-      <canvas id="minimap-canvas" width="140" height="100"></canvas>
+    <div id="minimap-container" class="minimap-container">
+      <div id="minimap" class="minimap hidden">
+        <canvas id="minimap-canvas" width="160" height="120"></canvas>
+      </div>
+      <div id="viewport-info" class="viewport-info">位置: 0, 0 | 缩放: 100%</div>
     </div>
 
     <!-- 图片放置提示 -->

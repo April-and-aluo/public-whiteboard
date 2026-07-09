@@ -22,6 +22,8 @@ let selectedType = null; // 'image' | 'text'
 let pendingTextPos = null; // { worldX, worldY, screenX, screenY }
 let editingTextId = null; // 正在编辑的文字 ID（null 表示新建）
 let minimapTimer = null;
+let savedViewport = null; // 跳转前保存的视口位置
+let dragStartPos = null; // 拖拽起始位置缓存
 
 // ===== 布局版本管理 =====
 
@@ -374,8 +376,9 @@ function startApp(userName) {
         selectedType = 'text';
         engine.selectedImage = null;
         engine.selectedText = t;
+        engine.isEditMode = false;
         engine.requestRender();
-        showImagePropsPanel(null, t);
+        // 不自动打开属性面板，等待编辑按钮点击
         return;
       }
     }
@@ -389,13 +392,66 @@ function startApp(userName) {
         selectedType = 'image';
         engine.selectedText = null;
         engine.selectedImage = img;
+        engine.isEditMode = false;
         engine.requestRender();
-        showImagePropsPanel(img, null);
         return;
       }
     }
     // 未命中
     deselectAll();
+  };
+
+  // 编辑按钮点击 -> 打开属性面板
+  engine.onEditButtonClick = () => {
+    engine.isEditMode = true;
+    engine.requestRender();
+    if (selectedType === 'image' && selectedImageId) {
+      const imgs = yjsSync.getAllImages();
+      const img = imgs.find(i => i.id === selectedImageId);
+      if (img) showImagePropsPanel(img, null);
+    } else if (selectedType === 'text' && selectedTextId) {
+      const texts = yjsSync.getAllTexts();
+      const t = texts.find(t => t.id === selectedTextId);
+      if (t) showImagePropsPanel(null, t);
+    }
+  };
+
+  // 拖拽移动
+  engine.onDragMove = (itemType, deltaX, deltaY) => {
+    if (itemType === 'image' && selectedImageId) {
+      const imgs = yjsSync.getAllImages();
+      const img = imgs.find(i => i.id === selectedImageId);
+      if (img) {
+        yjsSync.updateImageProps(selectedImageId, {
+          x: img.x + deltaX,
+          y: img.y + deltaY,
+        });
+      }
+    } else if (itemType === 'text' && selectedTextId) {
+      const texts = yjsSync.getAllTexts();
+      const t = texts.find(t => t.id === selectedTextId);
+      if (t) {
+        yjsSync.updateTextProps(selectedTextId, {
+          x: t.x + deltaX,
+          y: t.y + deltaY,
+        });
+      }
+    }
+  };
+
+  // 拖拽结束
+  engine.onDragEnd = () => {
+    // 拖拽完成后重新获取选中对象
+    if (selectedType === 'image' && selectedImageId) {
+      const imgs = yjsSync.getAllImages();
+      const img = imgs.find(i => i.id === selectedImageId);
+      if (img) engine.selectedImage = img;
+    } else if (selectedType === 'text' && selectedTextId) {
+      const texts = yjsSync.getAllTexts();
+      const t = texts.find(t => t.id === selectedTextId);
+      if (t) engine.selectedText = t;
+    }
+    engine.requestRender();
   };
 
   // 光标移动 -> 广播
@@ -407,9 +463,11 @@ function startApp(userName) {
     }
   };
 
-  // 视口变化 -> 更新迷你地图
+  // 视口变化 -> 更新迷你地图 + 屏幕边缘标记 + 视口信息
   engine.onViewportChange = () => {
     updateMinimap();
+    updateScreenEdgeMarkers();
+    updateViewportInfo();
   };
 
   // 数据变化 -> 重新渲染 + 更新选中状态
@@ -460,7 +518,14 @@ function startApp(userName) {
   yjsSync.onAwarenessChange = (users) => {
     updateUserList(users);
     cursorLayer.update(yjsSync.getRemoteCursors());
+    updateScreenEdgeMarkers();
   };
+
+  // 定期更新屏幕边缘标记（捕获远程光标移动）
+  setInterval(() => {
+    updateScreenEdgeMarkers();
+    cursorLayer.update(yjsSync.getRemoteCursors());
+  }, 1000);
 
   // 连接状态变化
   yjsSync.onConnectionChange = (state) => {
@@ -654,9 +719,12 @@ function setTool(tool) {
     document.getElementById('image-placement').classList.add('hidden');
     hideImagePropsPanel();
   }
-  // 切换工具时取消文字放置
-  if (tool !== 'text' && pendingTextPos) {
-    hideTextEditor();
+  // 切换工具时取消文字放置（始终隐藏提示）
+  if (tool !== 'text') {
+    document.getElementById('text-placement').classList.add('hidden');
+    document.getElementById('text-editor').classList.add('hidden');
+    pendingTextPos = null;
+    editingTextId = null;
   }
 
   currentTool = tool;
@@ -829,6 +897,8 @@ function showImagePropsPanel(img, text) {
 
 function hideImagePropsPanel() {
   document.getElementById('image-props-panel').classList.add('hidden');
+  engine.isEditMode = false;
+  engine.requestRender();
 }
 
 function deselectAll() {
@@ -837,6 +907,7 @@ function deselectAll() {
   selectedType = null;
   engine.selectedImage = null;
   engine.selectedText = null;
+  engine.isEditMode = false;
   engine.requestRender();
   hideImagePropsPanel();
 }
@@ -1052,6 +1123,11 @@ function updateUserList(users) {
     avatar.style.background = user.color || '#92400e';
     avatar.textContent = (user.name || '?').charAt(0).toUpperCase();
     avatar.title = user.name || '未知用户';
+    // 点击头像跳转到该用户位置
+    if (user.cursor && user.userId !== yjsSync.userId) {
+      avatar.style.cursor = 'pointer';
+      avatar.addEventListener('click', () => jumpToUser(user));
+    }
     userList.appendChild(avatar);
   }
 
@@ -1079,11 +1155,125 @@ function updateUserList(users) {
       name.className = 'user-dropdown-name';
       name.textContent = user.name || '未知用户';
 
+      // 点击跳转到用户位置
+      if (user.cursor && user.userId !== yjsSync.userId) {
+        item.style.cursor = 'pointer';
+        item.addEventListener('click', () => {
+          jumpToUser(user);
+          // 关闭下拉
+          document.getElementById('user-dropdown').classList.add('hidden');
+        });
+      }
+
       item.appendChild(avatar);
       item.appendChild(name);
       dropdownList.appendChild(item);
     }
   }
+
+  // 更新屏幕边缘标记
+  updateScreenEdgeMarkers();
+}
+
+// ===== 视角跳转 =====
+
+function jumpToUser(user) {
+  if (!user.cursor) return;
+  // 保存当前视口
+  savedViewport = {
+    offsetX: engine.offsetX,
+    offsetY: engine.offsetY,
+    scale: engine.scale,
+  };
+  // 跳转到用户位置（居中）
+  const canvasW = engine.mainCanvas.width / engine.dpr;
+  const canvasH = engine.mainCanvas.height / engine.dpr;
+  engine.offsetX = canvasW / 2 - user.cursor.x * engine.scale;
+  engine.offsetY = canvasH / 2 - user.cursor.y * engine.scale;
+  engine.render();
+  engine._notifyViewportChange();
+
+  // 显示返回按钮
+  const btn = document.getElementById('return-btn');
+  btn.classList.remove('hidden');
+  btn.onclick = returnToSavedViewport;
+}
+
+function returnToSavedViewport() {
+  if (!savedViewport) return;
+  engine.offsetX = savedViewport.offsetX;
+  engine.offsetY = savedViewport.offsetY;
+  engine.scale = savedViewport.scale;
+  savedViewport = null;
+  engine.render();
+  engine._notifyViewportChange();
+  document.getElementById('return-btn').classList.add('hidden');
+}
+
+// ===== 屏幕边缘标记其他用户 =====
+
+function updateScreenEdgeMarkers() {
+  const container = document.getElementById('edge-markers');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const remoteCursors = yjsSync.getRemoteCursors();
+  const bounds = engine.getViewportBounds();
+  const canvasW = engine.mainCanvas.width / engine.dpr;
+  const canvasH = engine.mainCanvas.height / engine.dpr;
+  const margin = 30;
+
+  for (const rc of remoteCursors) {
+    if (!rc.cursor) continue;
+    const screen = engine.worldToScreen(rc.cursor.x, rc.cursor.y);
+    // 如果在视口内，不显示标记
+    if (screen.x >= 0 && screen.x <= canvasW && screen.y >= 0 && screen.y <= canvasH) continue;
+
+    // 计算边缘位置（将屏幕坐标限制在边缘）
+    const cx = canvasW / 2;
+    const cy = canvasH / 2;
+    const dx = screen.x - cx;
+    const dy = screen.y - cy;
+    const angle = Math.atan2(dy, dx);
+    // 限制在画布边缘
+    const halfW = canvasW / 2 - margin;
+    const halfH = canvasH / 2 - margin;
+    let ex, ey;
+    const tanA = Math.abs(dy / dx);
+    if (tanA < halfH / halfW) {
+      // 左右边缘
+      ex = dx > 0 ? cx + halfW : cx - halfW;
+      ey = cy + (ex - cx) * (dy / dx);
+    } else {
+      // 上下边缘
+      ey = dy > 0 ? cy + halfH : cy - halfH;
+      ex = cx + (ey - cy) * (dx / dy);
+    }
+
+    const marker = document.createElement('div');
+    marker.className = 'edge-marker';
+    marker.style.left = (ex - 14) + 'px';
+    marker.style.top = (ey - 14) + 'px';
+    marker.style.background = rc.color || '#22c55e';
+    marker.textContent = (rc.name || '?').charAt(0).toUpperCase();
+    marker.title = `${rc.name} - 点击跳转`;
+    marker.addEventListener('click', () => {
+      jumpToUser({ cursor: rc.cursor, name: rc.name, color: rc.color });
+    });
+    container.appendChild(marker);
+  }
+
+  // 同时更新 minimap 上的远程光标
+  engine._remoteCursorsForMinimap = remoteCursors.filter(rc => rc.cursor);
+}
+
+// ===== 视口信息显示 =====
+
+function updateViewportInfo() {
+  const info = document.getElementById('viewport-info');
+  if (!info) return;
+  const bounds = engine.getViewportBounds();
+  info.textContent = `位置: ${Math.round(bounds.centerX)}, ${Math.round(bounds.centerY)} | 缩放: ${Math.round(engine.scale * 100)}%`;
 }
 
 // ===== 迷你地图更新 =====
@@ -1096,6 +1286,7 @@ function updateMinimap() {
     const strokes = yjsSync.getAllStrokes();
     const images = yjsSync.getAllImages();
     const texts = yjsSync.getAllTexts();
+    engine._remoteCursorsForMinimap = yjsSync.getRemoteCursors().filter(rc => rc.cursor);
     engine.renderMinimap(minimapCanvas, strokes, images, texts);
   }, 200);
 }

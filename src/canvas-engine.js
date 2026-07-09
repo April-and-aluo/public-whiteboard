@@ -47,6 +47,12 @@ export class CanvasEngine {
     // 渲染节流
     this.renderQueued = false;
 
+    // 拖拽状态（选择模式下拖动图片/文字）
+    this.isDragging = false;
+    this.dragStartWorld = null;
+    this.draggedType = null; // 'image' | 'text'
+    this.dragMoved = false;
+
     // 回调函数
     this.onStrokeStart = null;
     this.onStrokeMove = null;
@@ -57,8 +63,12 @@ export class CanvasEngine {
     this.onTextPlace = null; // (worldX, worldY) => void
     this.onCursorMove = null; // (worldX, worldY) => void
     this.onViewportChange = null;
+    this.onEditButtonClick = null; // () => void 编辑按钮被点击
+    this.onDragMove = null; // (itemType, deltaX, deltaY) => void 拖拽移动
+    this.onDragEnd = null; // () => void 拖拽结束
     this.selectedImage = null; // 当前选中的图片对象（用于高亮显示）
     this.selectedText = null; // 当前选中的文字对象（用于高亮显示）
+    this.isEditMode = false; // 是否在编辑模式（属性面板打开时）
 
     this._setupCanvas();
     this._setupEventListeners();
@@ -171,7 +181,35 @@ export class CanvasEngine {
     } else if (tool === 'text') {
       if (this.onTextPlace) this.onTextPlace(world.x, world.y);
     } else if (tool === 'select') {
+      // 1. 检查是否点击了编辑按钮
+      if (this._hitTestEditButton(point.x, point.y)) {
+        if (this.onEditButtonClick) this.onEditButtonClick();
+        return;
+      }
+      // 2. 检查是否点击了已有选中项（开始拖拽）
+      if (this.selectedImage && this._hitTestSelected(point.x, point.y, 'image')) {
+        this.isDragging = true;
+        this.dragStartWorld = { x: world.x, y: world.y };
+        this.draggedType = 'image';
+        this.dragMoved = false;
+        return;
+      }
+      if (this.selectedText && this._hitTestSelected(point.x, point.y, 'text')) {
+        this.isDragging = true;
+        this.dragStartWorld = { x: world.x, y: world.y };
+        this.draggedType = 'text';
+        this.dragMoved = false;
+        return;
+      }
+      // 3. 记住之前是否有选中
+      const hadSelection = !!(this.selectedImage || this.selectedText);
+      // 4. 检查是否点击了某个元素（选中它）
       if (this.onSelectClick) this.onSelectClick(world.x, world.y);
+      // 5. 如果之前没有选中、点击后也没有选中 -> 开始平移
+      //    如果之前有选中但现在取消选中 -> 仅取消选中，不平移
+      if (!hadSelection && !this.selectedImage && !this.selectedText) {
+        this._startPan(point.x, point.y);
+      }
     }
   }
 
@@ -220,6 +258,19 @@ export class CanvasEngine {
     if (this.currentTool === 'eraser' && (e.buttons & 1)) {
       this._eraseAt(world.x, world.y);
     }
+
+    // 选择模式拖拽
+    if (this.currentTool === 'select' && this.isDragging && this.dragStartWorld) {
+      const dx = world.x - this.dragStartWorld.x;
+      const dy = world.y - this.dragStartWorld.y;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+        this.dragMoved = true;
+      }
+      if (this.dragMoved && this.onDragMove) {
+        this.onDragMove(this.draggedType, dx, dy);
+        this.dragStartWorld = { x: world.x, y: world.y };
+      }
+    }
   }
 
   _onPointerUp(e) {
@@ -238,6 +289,17 @@ export class CanvasEngine {
     // 绘画结束
     if (this.isDrawing && this.currentStroke) {
       this._endDrawing();
+    }
+
+    // 拖拽结束
+    if (this.isDragging) {
+      if (this.dragMoved && this.onDragEnd) {
+        this.onDragEnd();
+      }
+      this.isDragging = false;
+      this.dragStartWorld = null;
+      this.draggedType = null;
+      this.dragMoved = false;
     }
   }
 
@@ -492,7 +554,133 @@ export class CanvasEngine {
       }
     }
 
+    // 绘制编辑按钮（圆形，位于选中边框右上角）
+    if ((this.selectedImage || this.selectedText) && !this.isEditMode) {
+      this._drawEditButton(ctx);
+    }
+
     ctx.restore();
+  }
+
+  // 绘制圆形编辑按钮
+  _drawEditButton(ctx) {
+    const pos = this._getEditButtonWorldPos();
+    if (!pos) return;
+    const r = 14 / this.scale; // 固定屏幕大小
+
+    ctx.save();
+    ctx.translate(pos.x, pos.y);
+    // 圆形背景
+    ctx.fillStyle = '#3b82f6';
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    // 铅笔图标（简化为白色线条）
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5 / this.scale;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const s = 6 / this.scale;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.6, s * 0.6);
+    ctx.lineTo(s * 0.6, -s * 0.6);
+    ctx.moveTo(s * 0.2, -s * 0.8);
+    ctx.lineTo(s * 0.8, -s * 0.2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 获取编辑按钮在世界坐标中的位置
+  _getEditButtonWorldPos() {
+    if (this.selectedImage) {
+      const img = this.selectedImage;
+      const scale = img.scale !== undefined ? img.scale : 1;
+      const dw = img.w * scale;
+      const dh = img.h * scale;
+      const cx = img.x + img.w / 2;
+      const cy = img.y + img.h / 2;
+      const rotation = (img.rotation || 0) * Math.PI / 180;
+      // 右上角（旋转前）
+      const lx = dw / 2 + 10 / this.scale;
+      const ly = -dh / 2 - 10 / this.scale;
+      const wx = cx + lx * Math.cos(rotation) - ly * Math.sin(rotation);
+      const wy = cy + lx * Math.sin(rotation) + ly * Math.cos(rotation);
+      return { x: wx, y: wy };
+    }
+    if (this.selectedText) {
+      const t = this.selectedText;
+      const bounds = this._getTextBounds(t);
+      if (!bounds) return null;
+      const cx = (bounds.minX + bounds.maxX) / 2;
+      const cy = (bounds.minY + bounds.maxY) / 2;
+      const rotation = (t.rotation || 0) * Math.PI / 180;
+      const dw = bounds.maxX - bounds.minX;
+      const dh = bounds.maxY - bounds.minY;
+      const lx = dw / 2 + 10 / this.scale;
+      const ly = -dh / 2 - 10 / this.scale;
+      const wx = cx + lx * Math.cos(rotation) - ly * Math.sin(rotation);
+      const wy = cy + lx * Math.sin(rotation) + ly * Math.cos(rotation);
+      return { x: wx, y: wy };
+    }
+    return null;
+  }
+
+  // 检查屏幕坐标是否点击了编辑按钮
+  _hitTestEditButton(screenX, screenY) {
+    if (!this.selectedImage && !this.selectedText) return false;
+    if (this.isEditMode) return false;
+    const pos = this._getEditButtonWorldPos();
+    if (!pos) return false;
+    const screen = this.worldToScreen(pos.x, pos.y);
+    const r = 18; // 点击半径稍大
+    const dx = screenX - screen.x;
+    const dy = screenY - screen.y;
+    return dx * dx + dy * dy <= r * r;
+  }
+
+  // 检查屏幕坐标是否点击了选中元素
+  _hitTestSelected(screenX, screenY, type) {
+    const world = this.screenToWorld(screenX, screenY);
+    if (type === 'image' && this.selectedImage) {
+      // 使用缓存的世界坐标进行命中检测
+      const img = this.selectedImage;
+      const scale = img.scale !== undefined ? img.scale : 1;
+      const dw = img.w * scale;
+      const dh = img.h * scale;
+      const cx = img.x + img.w / 2;
+      const cy = img.y + img.h / 2;
+      const rotation = (img.rotation || 0) * Math.PI / 180;
+      const ddx = world.x - cx;
+      const ddy = world.y - cy;
+      const lx = ddx * Math.cos(-rotation) - ddy * Math.sin(-rotation);
+      const ly = ddx * Math.sin(-rotation) + ddy * Math.cos(-rotation);
+      return lx >= -dw/2 && lx <= dw/2 && ly >= -dh/2 && ly <= dh/2;
+    }
+    if (type === 'text' && this.selectedText) {
+      const bounds = this._getTextBounds(this.selectedText);
+      if (!bounds) return false;
+      return world.x >= bounds.minX && world.x <= bounds.maxX &&
+             world.y >= bounds.minY && world.y <= bounds.maxY;
+    }
+    return false;
+  }
+
+  // 获取当前视口在世界坐标中的边界
+  getViewportBounds() {
+    const w = this.mainCanvas.width / this.dpr;
+    const h = this.mainCanvas.height / this.dpr;
+    const topLeft = this.screenToWorld(0, 0);
+    const bottomRight = this.screenToWorld(w, h);
+    return {
+      minX: topLeft.x,
+      minY: topLeft.y,
+      maxX: bottomRight.x,
+      maxY: bottomRight.y,
+      centerX: (topLeft.x + bottomRight.x) / 2,
+      centerY: (topLeft.y + bottomRight.y) / 2,
+      width: bottomRight.x - topLeft.x,
+      height: bottomRight.y - topLeft.y,
+    };
   }
 
   // 绘制单条笔画（手绘纸感风格）
@@ -852,6 +1040,51 @@ export class CanvasEngine {
           mctx.lineTo(pts[i][0] * ratio + offsetX, pts[i][1] * ratio + offsetY);
         }
         mctx.stroke();
+      }
+    }
+
+    // 画图片缩略（色块）
+    if (images) {
+      for (const img of images) {
+        const scale = img.scale !== undefined ? img.scale : 1;
+        const ix = img.x * ratio + offsetX;
+        const iy = img.y * ratio + offsetY;
+        const iw = img.w * scale * ratio;
+        const ih = img.h * scale * ratio;
+        mctx.fillStyle = 'rgba(59, 130, 246, 0.25)';
+        mctx.fillRect(ix, iy, iw, ih);
+        mctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+        mctx.lineWidth = 0.5;
+        mctx.strokeRect(ix, iy, iw, ih);
+      }
+    }
+
+    // 画文字缩略（色块）
+    if (texts) {
+      for (const t of texts) {
+        const bounds = this._getTextBounds(t);
+        if (!bounds) continue;
+        const tx = bounds.minX * ratio + offsetX;
+        const ty = bounds.minY * ratio + offsetY;
+        const tw = (bounds.maxX - bounds.minX) * ratio;
+        const th = (bounds.maxY - bounds.minY) * ratio;
+        mctx.fillStyle = 'rgba(234, 88, 12, 0.25)';
+        mctx.fillRect(tx, ty, tw, th);
+        mctx.strokeStyle = 'rgba(234, 88, 12, 0.6)';
+        mctx.lineWidth = 0.5;
+        mctx.strokeRect(tx, ty, tw, th);
+      }
+    }
+
+    // 画其他用户光标位置
+    if (this._remoteCursorsForMinimap) {
+      for (const rc of this._remoteCursorsForMinimap) {
+        const cx = rc.cursor.x * ratio + offsetX;
+        const cy = rc.cursor.y * ratio + offsetY;
+        mctx.fillStyle = rc.color || '#22c55e';
+        mctx.beginPath();
+        mctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+        mctx.fill();
       }
     }
 
