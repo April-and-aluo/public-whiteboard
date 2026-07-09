@@ -11,7 +11,7 @@
   <script src="config.js"></script>
 </head>
 <body>
-  <!-- 昵称入口弹窗 -->
+  <!-- 账号登录/注册弹窗 -->
   <div id="nickname-overlay" class="overlay">
     <div class="nickname-card">
       <div class="card-doodle">
@@ -22,11 +22,24 @@
         </svg>
       </div>
       <h1 class="nickname-title">公共展示板</h1>
-      <p class="nickname-subtitle">输入昵称，开始一起涂鸦</p>
-      <div class="nickname-input-wrap">
-        <input type="text" id="nickname-input" class="nickname-input" placeholder="你的昵称..." maxlength="20" autocomplete="off">
+      <p class="nickname-subtitle" id="auth-subtitle">登录账号，开始一起涂鸦</p>
+
+      <!-- 模式切换 -->
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-mode="login">登录</button>
+        <button class="auth-tab" data-mode="register">注册</button>
       </div>
-      <button id="nickname-submit" class="nickname-btn">进入画板</button>
+
+      <div class="nickname-input-wrap">
+        <input type="text" id="username-input" class="nickname-input" placeholder="账号名..." maxlength="20" autocomplete="username">
+      </div>
+      <div class="nickname-input-wrap">
+        <input type="password" id="password-input" class="nickname-input" placeholder="密码..." maxlength="64" autocomplete="current-password">
+      </div>
+
+      <div id="auth-error" class="auth-error hidden"></div>
+
+      <button id="auth-submit" class="nickname-btn">登录</button>
     </div>
   </div>
 
@@ -42,10 +55,22 @@
           </svg>
           <span class="logo-text">公共展示板</span>
         </div>
+        <!-- 布局切换按钮（仅移动端显示） -->
+        <button id="layout-toggle" class="layout-toggle-btn" title="切换布局">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <line x1="3" y1="9" x2="21" y2="9"/>
+          </svg>
+        </button>
       </div>
       <div class="topbar-right">
         <div id="user-list" class="user-list"></div>
         <div id="online-count" class="online-count"></div>
+        <!-- 用户列表下拉面板 -->
+        <div id="user-dropdown" class="user-dropdown hidden">
+          <div class="user-dropdown-header">在线用户</div>
+          <div id="user-dropdown-list" class="user-dropdown-list"></div>
+        </div>
       </div>
     </header>
 
@@ -62,7 +87,7 @@
 
     <!-- 工具栏 -->
     <div id="toolbar" class="toolbar">
-      <div class="tool-group">
+      <div class="tool-group tool-main-row">
         <button class="tool-btn active" data-tool="pen" title="画笔">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 19l7-7 3 3-7 7-3-3z"/>
@@ -87,9 +112,9 @@
         <input type="file" id="image-input" accept="image/*" class="hidden-file-input">
       </div>
 
-      <div class="tool-divider"></div>
+      <div class="tool-divider tool-options-divider"></div>
 
-      <div class="tool-group" id="pen-options">
+      <div class="tool-group tool-options-row" id="pen-options">
         <div class="color-picker-wrap">
           <input type="color" id="color-picker" class="color-picker" value="#1e3a5f">
           <label for="color-picker" class="color-label" title="选择颜色">
@@ -111,7 +136,7 @@
 
       <div class="tool-divider"></div>
 
-      <div class="tool-group">
+      <div class="tool-group tool-actions-row">
         <button class="tool-btn" id="undo-btn" title="撤销">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 7v6h6"/>
@@ -123,6 +148,14 @@
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
             <polyline points="7 10 12 15 17 10"/>
             <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </button>
+        <!-- 移动端更多按钮（折叠/展开选项行） -->
+        <button class="tool-btn tool-more-btn" id="more-btn" title="更多选项">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="12" cy="5" r="1.5"/>
+            <circle cx="12" cy="12" r="1.5"/>
+            <circle cx="12" cy="19" r="1.5"/>
           </svg>
         </button>
       </div>

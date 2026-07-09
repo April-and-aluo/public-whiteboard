@@ -292,6 +292,9 @@ export class CanvasEngine {
       y: (pointers[0].y + pointers[1].y) / 2,
     };
 
+    // 记录初始中心对应的世界坐标，用于计算平移增量
+    this.pinchStartWorld = this.screenToWorld(this.pinchCenter.x, this.pinchCenter.y);
+
     // 停止当前绘画
     if (this.isDrawing && this.currentStroke) {
       this._endDrawing();
@@ -306,13 +309,18 @@ export class CanvasEngine {
     const dy = pointers[1].y - pointers[0].y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
+    // 当前双指中心
+    const currentCenter = {
+      x: (pointers[0].x + pointers[1].x) / 2,
+      y: (pointers[0].y + pointers[1].y) / 2,
+    };
+
     const newScale = Math.max(0.1, Math.min(10, this.pinchStartScale * (dist / this.pinchStartDist)));
 
-    // 以双指中心为锚点缩放
-    const worldBefore = this.screenToWorld(this.pinchCenter.x, this.pinchCenter.y);
+    // 缩放围绕初始世界点 + 平移跟随手指中心移动
     this.scale = newScale;
-    this.offsetX = this.pinchCenter.x - worldBefore.x * this.scale;
-    this.offsetY = this.pinchCenter.y - worldBefore.y * this.scale;
+    this.offsetX = currentCenter.x - this.pinchStartWorld.x * this.scale;
+    this.offsetY = currentCenter.y - this.pinchStartWorld.y * this.scale;
 
     this.render();
     this._notifyViewportChange();
@@ -321,6 +329,7 @@ export class CanvasEngine {
   _endPinchGesture() {
     this.pinchStartDist = 0;
     this.pinchCenter = null;
+    this.pinchStartWorld = null;
   }
 
   // ===== 绘画逻辑 =====

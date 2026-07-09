@@ -580,3 +580,261 @@ html, body {
 .canvas-area.tool-image #main-canvas { cursor: copy; }
 .canvas-area.panning #main-canvas { cursor: grab; }
 .canvas-area.panning.active-pan #main-canvas { cursor: grabbing; }
+
+/* ============================================
+   账号登录/注册样式
+   ============================================ */
+.auth-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  border-bottom: 2.5px solid var(--border);
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 8px;
+  font-family: 'Patrick Hand', cursive;
+  font-size: 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  color: var(--ink-faded);
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: -2.5px;
+}
+
+.auth-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+  font-weight: 700;
+}
+
+.nickname-input[type="password"] {
+  letter-spacing: 0.3em;
+}
+
+.auth-error {
+  color: var(--accent-red);
+  font-family: 'Patrick Hand', cursive;
+  font-size: 16px;
+  padding: 8px 12px;
+  background: #fef2f2;
+  border: 2px solid var(--accent-red);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+/* ============================================
+   用户列表下拉面板
+   ============================================ */
+#user-list, #online-count {
+  cursor: pointer;
+}
+
+.user-dropdown {
+  position: absolute;
+  top: 52px;
+  right: 16px;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--paper-light);
+  border: 2.5px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 4px 4px 0 var(--border);
+  z-index: 200;
+  padding: 8px;
+}
+
+.user-dropdown-header {
+  font-family: 'Patrick Hand', cursive;
+  font-size: 14px;
+  color: var(--ink-faded);
+  padding: 4px 8px 8px;
+  border-bottom: 1.5px dashed var(--ink-faded);
+  margin-bottom: 4px;
+}
+
+.user-dropdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.user-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.user-dropdown-item:hover {
+  background: var(--hover-bg);
+}
+
+.user-dropdown-item .user-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+  box-shadow: 1px 1px 0 var(--shadow);
+}
+
+.user-dropdown-name {
+  font-family: 'Patrick Hand', cursive;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+/* ============================================
+   布局切换按钮
+   ============================================ */
+.layout-toggle-btn {
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--paper-light);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--ink);
+  box-shadow: 2px 2px 0 var(--shadow);
+  transition: all 0.12s;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.layout-toggle-btn:hover {
+  background: var(--hover-bg);
+  transform: translate(-1px, -1px);
+}
+
+/* 桌面端隐藏更多按钮 */
+.tool-more-btn { display: none; }
+
+/* ============================================
+   新版移动端布局 (layout-mobile-v2)
+   ============================================ */
+@media (max-width: 767px) {
+  body.layout-mobile-v2 .layout-toggle-btn {
+    display: flex;
+  }
+
+  body.layout-mobile-v2 .topbar {
+    height: 40px;
+    padding: 0 8px;
+  }
+  body.layout-mobile-v2 .logo-text {
+    font-size: 18px;
+  }
+  body.layout-mobile-v2 .user-avatar {
+    width: 24px;
+    height: 24px;
+    font-size: 10px;
+  }
+  body.layout-mobile-v2 .online-count {
+    font-size: 13px;
+    padding: 2px 8px;
+  }
+  body.layout-mobile-v2 .connection-banner {
+    top: 40px;
+  }
+
+  /* 工具栏：可折叠两行布局 */
+  body.layout-mobile-v2 .toolbar {
+    flex-wrap: wrap;
+    padding: 4px 6px;
+    gap: 4px;
+    justify-content: center;
+  }
+
+  /* 默认折叠选项行 */
+  body.layout-mobile-v2 .toolbar.options-collapsed .tool-options-row,
+  body.layout-mobile-v2 .toolbar.options-collapsed .tool-options-divider {
+    display: none;
+  }
+
+  /* 展开时选项行换到第二行 */
+  body.layout-mobile-v2 .toolbar:not(.options-collapsed) .tool-options-row {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+    order: 10;
+  }
+  body.layout-mobile-v2 .toolbar:not(.options-collapsed) .tool-options-divider {
+    display: block;
+    width: 100%;
+    height: 1.5px;
+    order: 9;
+  }
+
+  /* 触摸友好的按钮尺寸 */
+  body.layout-mobile-v2 .tool-btn,
+  body.layout-mobile-v2 .brush-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+  }
+  body.layout-mobile-v2 .tool-btn svg,
+  body.layout-mobile-v2 .brush-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+  body.layout-mobile-v2 .color-picker-wrap {
+    width: 44px;
+    height: 44px;
+  }
+  body.layout-mobile-v2 .color-display {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* 更多按钮显示 */
+  body.layout-mobile-v2 .tool-more-btn {
+    display: flex;
+  }
+
+  /* 迷你地图默认隐藏 */
+  body.layout-mobile-v2 .minimap {
+    display: none;
+  }
+
+  /* 用户下拉面板调整 */
+  body.layout-mobile-v2 .user-dropdown {
+    top: 40px;
+    right: 8px;
+    min-width: 160px;
+  }
+
+  /* 登录弹窗调整 */
+  body.layout-mobile-v2 .nickname-card {
+    padding: 24px 24px;
+    box-shadow: 4px 4px 0 var(--border);
+  }
+  body.layout-mobile-v2 .nickname-title {
+    font-size: 32px;
+  }
+  body.layout-mobile-v2 .nickname-subtitle {
+    font-size: 16px;
+  }
+  body.layout-mobile-v2 .auth-tab {
+    font-size: 16px;
+    padding: 6px;
+  }
+  body.layout-mobile-v2 .nickname-input {
+    font-size: 18px;
+    padding: 12px 14px;
+  }
+}
+
+/* 移动端显示布局切换按钮（旧版也显示，方便切回新版） */
+@media (max-width: 767px) {
+  .layout-toggle-btn {
+    display: flex;
+  }
+}

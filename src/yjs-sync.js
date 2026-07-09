@@ -333,6 +333,25 @@ export class YjsSync {
     return img.get('id');
   }
 
+  // 删除指定图片（通过索引）
+  removeImage(index) {
+    if (!this.images || index < 0 || index >= this.images.length) return;
+    this.images.delete(index, 1);
+  }
+
+  // 删除指定图片（通过 ID）
+  removeImageById(id) {
+    if (!this.images) return false;
+    for (let i = this.images.length - 1; i >= 0; i--) {
+      const img = this.images.get(i);
+      if (img.get('id') === id) {
+        this.images.delete(i, 1);
+        return true;
+      }
+    }
+    return false;
+  }
+
   // 更新图片位置
   updateImagePosition(id, x, y) {
     if (!this.images) return;
@@ -360,6 +379,7 @@ export class YjsSync {
         h: img.get('h'),
         dataUrl: img.get('dataUrl'),
         userId: img.get('userId'),
+        index: i,
       });
     }
     return result;

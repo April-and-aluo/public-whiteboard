@@ -10,6 +10,7 @@ import { WebSocketServer } from 'ws';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import * as Y from 'yjs';
 import * as syncProtocol from 'y-protocols/sync';
@@ -33,6 +34,126 @@ const wsReadyStateConnecting = 0;
 const wsReadyStateOpen = 1;
 const wsReadyStateClosing = 2;
 const wsReadyStateClosed = 3;
+
+// ============================================
+// 用户数据管理 - 注册 / 登录 / Token 验证
+// ============================================
+const DATA_DIR = path.join(__dirname, 'data');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const TOKEN_TTL = 7 * 24 * 60 * 60 * 1000; // 7 天（毫秒）
+
+// 内存中的 token 存储：token -> { username, createdAt }
+const tokens = new Map();
+
+// 串行化写入队列，避免并发写入冲突
+let writeQueue = Promise.resolve();
+
+// 确保数据目录存在
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
+
+// 读取用户数据（带默认值）
+function readUsers() {
+  try {
+    if (!fs.existsSync(USERS_FILE)) {
+      return {};
+    }
+    const data = fs.readFileSync(USERS_FILE, 'utf-8');
+    return JSON.parse(data);
+  } catch (err) {
+    console.error('[!] 读取用户数据失败:', err.message);
+    return {};
+  }
+}
+
+// 原子写入用户数据（临时文件 + rename），使用串行化队列保证顺序
+function writeUsers(users) {
+  ensureDataDir();
+  writeQueue = writeQueue.then(() => {
+    return new Promise((resolve, reject) => {
+      const tmpFile = USERS_FILE + '.tmp';
+      fs.writeFile(tmpFile, JSON.stringify(users, null, 2), 'utf-8', (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        fs.rename(tmpFile, USERS_FILE, (renameErr) => {
+          if (renameErr) {
+            reject(renameErr);
+          } else {
+            resolve();
+          }
+        });
+      });
+    });
+  }).catch((err) => {
+    console.error('[!] 写入用户数据失败:', err.message);
+  });
+  return writeQueue;
+}
+
+// 密码哈希（scryptSync + 随机 salt）
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, 64);
+  return salt.toString('hex') + ':' + hash.toString('hex');
+}
+
+// 验证密码（使用 timingSafeEqual 防止时序攻击）
+function verifyPassword(password, stored) {
+  try {
+    const [saltHex, hashHex] = stored.split(':');
+    const salt = Buffer.from(saltHex, 'hex');
+    const storedHash = Buffer.from(hashHex, 'hex');
+    const hash = crypto.scryptSync(password, salt, 64);
+    return hash.length === storedHash.length && crypto.timingSafeEqual(hash, storedHash);
+  } catch (err) {
+    return false;
+  }
+}
+
+// 用户名验证：2-20 字符，允许字母数字下划线和中文
+function isValidUsername(username) {
+  if (typeof username !== 'string') return false;
+  if (username.length < 2 || username.length > 20) return false;
+  return /^[a-zA-Z0-9_\u4e00-\u9fa5]+$/.test(username);
+}
+
+// 密码验证：4-64 字符
+function isValidPassword(password) {
+  if (typeof password !== 'string') return false;
+  return password.length >= 4 && password.length <= 64;
+}
+
+// 生成 token（crypto.randomBytes(32)）
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// 创建 token 并存入内存
+function createToken(username) {
+  const token = generateToken();
+  tokens.set(token, {
+    username,
+    createdAt: Date.now(),
+  });
+  return token;
+}
+
+// 验证 token 有效性（检查 7 天 TTL）
+function verifyToken(token) {
+  if (!token) return null;
+  const record = tokens.get(token);
+  if (!record) return null;
+  if (Date.now() - record.createdAt > TOKEN_TTL) {
+    tokens.delete(token);
+    return null;
+  }
+  return record;
+}
 
 // ============================================
 // 房间管理 - 每个房间维护一个 Y.Doc
@@ -253,7 +374,7 @@ const MIME_TYPES = {
 // ============================================
 // HTTP 服务器（静态文件 + 健康检查）
 // ============================================
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   // 健康检查
   if (req.url === '/health') {
     let totalConns = 0;
@@ -271,6 +392,109 @@ const server = http.createServer((req, res) => {
       uptime: process.uptime(),
       timestamp: Date.now(),
     }));
+    return;
+  }
+
+  // ============================================
+  // API 路由（注册 / 登录 / 验证 token）
+  // ============================================
+  const apiPath = req.url.split('?')[0];
+  if (apiPath.startsWith('/api/')) {
+    // 设置 CORS 头，允许跨域访问
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    // 处理预检请求
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    // 读取并解析请求体
+    const body = await new Promise((resolve) => {
+      let data = '';
+      req.on('data', (chunk) => { data += chunk; });
+      req.on('end', () => resolve(data));
+      req.on('error', () => resolve(''));
+    });
+
+    let parsed = {};
+    try {
+      parsed = body ? JSON.parse(body) : {};
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: '无效的 JSON' }));
+      return;
+    }
+
+    // 辅助函数：发送 JSON 响应
+    const sendJson = (status, payload) => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(payload));
+    };
+
+    // /api/register - 注册账号
+    if (apiPath === '/api/register' && req.method === 'POST') {
+      const { username, password } = parsed;
+      if (!isValidUsername(username)) {
+        sendJson(400, { ok: false, error: '用户名需为 2-20 字符，允许字母数字下划线和中文' });
+        return;
+      }
+      if (!isValidPassword(password)) {
+        sendJson(400, { ok: false, error: '密码需为 4-64 字符' });
+        return;
+      }
+      const users = readUsers();
+      if (users[username]) {
+        sendJson(409, { ok: false, error: '用户名已存在' });
+        return;
+      }
+      users[username] = {
+        password: hashPassword(password),
+        createdAt: Date.now(),
+      };
+      await writeUsers(users);
+      console.log(`[+] 用户注册: ${username}`);
+      sendJson(200, { ok: true, message: '注册成功' });
+      return;
+    }
+
+    // /api/login - 登录验证
+    if (apiPath === '/api/login' && req.method === 'POST') {
+      const { username, password } = parsed;
+      if (!isValidUsername(username) || !isValidPassword(password)) {
+        sendJson(400, { ok: false, error: '用户名或密码无效' });
+        return;
+      }
+      const users = readUsers();
+      const user = users[username];
+      if (!user || !verifyPassword(password, user.password)) {
+        sendJson(401, { ok: false, error: '用户名或密码错误' });
+        return;
+      }
+      const token = createToken(username);
+      console.log(`[+] 用户登录: ${username}`);
+      sendJson(200, { ok: true, token, username });
+      return;
+    }
+
+    // /api/verify - 验证 token 有效性
+    if (apiPath === '/api/verify' && req.method === 'POST') {
+      const token = parsed.token ||
+        (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      const record = verifyToken(token);
+      if (!record) {
+        sendJson(401, { ok: false, error: 'token 无效或已过期' });
+        return;
+      }
+      sendJson(200, { ok: true, username: record.username });
+      return;
+    }
+
+    // 未知 API 端点
+    sendJson(404, { ok: false, error: '未知的 API 端点' });
     return;
   }
 

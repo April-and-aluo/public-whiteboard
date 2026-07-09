@@ -17,38 +17,166 @@ let currentWidth = 4;
 let pendingImageFile = null;
 let minimapTimer = null;
 
-// ===== 昵称入口 =====
+// ===== 布局版本管理 =====
 
-function initNicknameEntry() {
+function initLayout() {
+  const urlParams = new URLSearchParams(window.location.search);
+  let mode = urlParams.get('layout');
+
+  if (!mode) {
+    mode = localStorage.getItem('wb_layout') || 'auto';
+  }
+
+  if (mode === 'legacy') {
+    document.body.classList.add('layout-legacy');
+  } else if (mode === 'v2') {
+    document.body.classList.add('layout-mobile-v2');
+  } else {
+    // auto: 移动端使用 v2
+    if (window.innerWidth < 768) {
+      document.body.classList.add('layout-mobile-v2');
+    }
+  }
+
+  const toggleBtn = document.getElementById('layout-toggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      const isV2 = document.body.classList.contains('layout-mobile-v2');
+      if (isV2) {
+        document.body.classList.remove('layout-mobile-v2');
+        document.body.classList.add('layout-legacy');
+        localStorage.setItem('wb_layout', 'legacy');
+      } else {
+        document.body.classList.remove('layout-legacy');
+        document.body.classList.add('layout-mobile-v2');
+        localStorage.setItem('wb_layout', 'v2');
+      }
+      setTimeout(() => {
+        if (engine) engine.render();
+        if (cursorLayer) cursorLayer.checkMobile();
+      }, 100);
+    });
+  }
+}
+
+// ===== 账号认证入口 =====
+
+const API_BASE = window.API_URL || '';
+let authMode = 'login';
+
+function initAuthEntry() {
   const overlay = document.getElementById('nickname-overlay');
-  const input = document.getElementById('nickname-input');
-  const submitBtn = document.getElementById('nickname-submit');
+  const usernameInput = document.getElementById('username-input');
+  const passwordInput = document.getElementById('password-input');
+  const submitBtn = document.getElementById('auth-submit');
+  const errorDiv = document.getElementById('auth-error');
+  const subtitle = document.getElementById('auth-subtitle');
 
-  // 自动聚焦
-  setTimeout(() => input.focus(), 300);
+  // 先尝试自动登录
+  const savedToken = localStorage.getItem('wb_token');
+  if (savedToken) {
+    autoLogin(savedToken, overlay);
+  }
 
-  const handleSubmit = () => {
-    const name = input.value.trim();
-    if (!name) {
-      input.classList.add('error');
-      input.placeholder = '请输入昵称...';
-      input.focus();
+  // 模式切换
+  document.querySelectorAll('.auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      authMode = tab.dataset.mode;
+      document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      submitBtn.textContent = authMode === 'login' ? '登录' : '注册';
+      subtitle.textContent = authMode === 'login'
+        ? '登录账号，开始一起涂鸦'
+        : '注册新账号，开始一起涂鸦';
+      errorDiv.classList.add('hidden');
+    });
+  });
+
+  function showError(msg) {
+    errorDiv.textContent = msg;
+    errorDiv.classList.remove('hidden');
+  }
+
+  const handleSubmit = async () => {
+    const username = usernameInput.value.trim();
+    const password = passwordInput.value;
+
+    if (!username || !password) {
+      showError('请输入账号名和密码');
       return;
     }
-    overlay.style.opacity = '0';
-    setTimeout(() => {
-      overlay.classList.add('hidden');
-      startApp(name);
-    }, 400);
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = '处理中...';
+
+    try {
+      const endpoint = authMode === 'login' ? '/api/login' : '/api/register';
+      const resp = await fetch(API_BASE + endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        showError(data.error || '操作失败');
+        submitBtn.disabled = false;
+        submitBtn.textContent = authMode === 'login' ? '登录' : '注册';
+        return;
+      }
+
+      localStorage.setItem('wb_token', data.token);
+      localStorage.setItem('wb_username', data.username);
+
+      overlay.style.opacity = '0';
+      setTimeout(() => {
+        overlay.classList.add('hidden');
+        startApp(data.username);
+      }, 400);
+    } catch (err) {
+      showError('网络错误，请检查连接');
+      submitBtn.disabled = false;
+      submitBtn.textContent = authMode === 'login' ? '登录' : '注册';
+    }
   };
 
   submitBtn.addEventListener('click', handleSubmit);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handleSubmit();
+  [usernameInput, passwordInput].forEach(input => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleSubmit();
+    });
+    input.addEventListener('input', () => errorDiv.classList.add('hidden'));
   });
-  input.addEventListener('input', () => {
-    input.classList.remove('error');
-  });
+
+  if (!savedToken) {
+    setTimeout(() => usernameInput.focus(), 300);
+  }
+}
+
+async function autoLogin(token, overlay) {
+  try {
+    const resp = await fetch(API_BASE + '/api/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      overlay.style.opacity = '0';
+      setTimeout(() => {
+        overlay.classList.add('hidden');
+        startApp(data.username);
+      }, 400);
+    } else {
+      localStorage.removeItem('wb_token');
+      localStorage.removeItem('wb_username');
+      const usernameInput = document.getElementById('username-input');
+      if (usernameInput) setTimeout(() => usernameInput.focus(), 300);
+    }
+  } catch (e) {
+    const usernameInput = document.getElementById('username-input');
+    if (usernameInput) setTimeout(() => usernameInput.focus(), 300);
+  }
 }
 
 // ===== 启动应用 =====
@@ -88,12 +216,22 @@ function startApp(userName) {
 
   // 橡皮擦 -> 命中检测并删除
   engine.onErase = (worldX, worldY) => {
+    // 1. 先检测笔画（上层优先删除）
     const strokes = yjsSync.getAllStrokes();
-    // 从后往前检测（上层优先删除）
     for (let i = strokes.length - 1; i >= 0; i--) {
       const s = strokes[i];
       if (pointToStrokeDistance(worldX, worldY, s) < s.width * 1.5 + 8) {
         yjsSync.removeStroke(s.index);
+        return true;
+      }
+    }
+    // 2. 未命中笔画，检测图片（下层）
+    const images = yjsSync.getAllImages();
+    for (let i = images.length - 1; i >= 0; i--) {
+      const img = images[i];
+      if (worldX >= img.x && worldX <= img.x + img.w &&
+          worldY >= img.y && worldY <= img.y + img.h) {
+        yjsSync.removeImageById(img.id);
         return true;
       }
     }
@@ -105,7 +243,6 @@ function startApp(userName) {
     if (!pendingImageFile) return;
     const { dataUrl, naturalWidth, naturalHeight } = pendingImageFile;
 
-    // 计算缩放后的尺寸（适应画布）
     const maxDim = 400;
     let w = naturalWidth;
     let h = naturalHeight;
@@ -115,15 +252,11 @@ function startApp(userName) {
       h = Math.round(h * ratio);
     }
 
-    // 以点击位置为中心放置
     yjsSync.addImage(worldX - w / 2, worldY - h / 2, w, h, dataUrl);
 
-    // 清理
     pendingImageFile = null;
     engine.clearPendingImage();
     document.getElementById('image-placement').classList.add('hidden');
-
-    // 切回画笔工具
     setTool('pen');
   };
 
@@ -166,27 +299,21 @@ function startApp(userName) {
   // 初始渲染
   engine.render();
 
-  // 手动触发初始用户列表更新
   setTimeout(() => {
     const users = yjsSync.getOnlineUsers();
     updateUserList(users);
     cursorLayer.update(yjsSync.getRemoteCursors());
   }, 500);
 
-  // 显示迷你地图
   setTimeout(() => {
     document.getElementById('minimap').classList.remove('hidden');
     updateMinimap();
   }, 500);
 
-  // 设置工具栏
   setupToolbar();
-
-  // 键盘快捷键
   setupKeyboard();
-
-  // 响应式
   setupResponsive();
+  setupUserListToggle();
 }
 
 // ===== 点到笔画距离计算 =====
@@ -226,18 +353,41 @@ function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
   return Math.sqrt(ddx * ddx + ddy * ddy);
 }
 
+// ===== 用户列表展开/收起 =====
+
+function setupUserListToggle() {
+  const userList = document.getElementById('user-list');
+  const onlineCount = document.getElementById('online-count');
+  const dropdown = document.getElementById('user-dropdown');
+
+  const toggle = (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('hidden');
+  };
+
+  userList.addEventListener('click', toggle);
+  onlineCount.addEventListener('click', toggle);
+
+  document.addEventListener('click', (e) => {
+    if (!dropdown.classList.contains('hidden') &&
+        !userList.contains(e.target) &&
+        !onlineCount.contains(e.target) &&
+        !dropdown.contains(e.target)) {
+      dropdown.classList.add('hidden');
+    }
+  });
+}
+
 // ===== 工具栏设置 =====
 
 function setupToolbar() {
   const toolbar = document.getElementById('toolbar');
-  const canvasArea = document.querySelector('.canvas-area');
 
   // 工具切换
   document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
     btn.addEventListener('click', () => {
       const tool = btn.dataset.tool;
       if (tool === 'image') {
-        // 图片工具 -> 触发文件选择
         document.getElementById('image-input').click();
       } else {
         setTool(tool);
@@ -282,8 +432,21 @@ function setupToolbar() {
     const file = e.target.files[0];
     if (!file) return;
     handleImageUpload(file);
-    imageInput.value = ''; // 重置以便重复选择
+    imageInput.value = '';
   });
+
+  // 移动端工具栏折叠
+  const moreBtn = document.getElementById('more-btn');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      toolbar.classList.toggle('options-collapsed');
+    });
+  }
+
+  // 移动端默认折叠选项
+  if (window.innerWidth < 768) {
+    toolbar.classList.add('options-collapsed');
+  }
 }
 
 // 设置当前工具
@@ -291,16 +454,13 @@ function setTool(tool) {
   currentTool = tool;
   engine.setTool(tool);
 
-  // 更新工具栏 UI
   document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === tool);
   });
 
-  // 更新工具栏 class（控制 pen-options 显隐）
   const toolbar = document.getElementById('toolbar');
   toolbar.className = 'toolbar tool-' + tool;
 
-  // 更新画布区域 class（控制光标样式）
   const canvasArea = document.querySelector('.canvas-area');
   canvasArea.className = 'canvas-area tool-' + tool;
 }
@@ -322,7 +482,6 @@ function handleImageUpload(file) {
   reader.onload = (e) => {
     const img = new Image();
     img.onload = () => {
-      // 压缩大图
       const maxDim = 1080;
       let w = img.naturalWidth;
       let h = img.naturalHeight;
@@ -341,7 +500,6 @@ function handleImageUpload(file) {
 
       const dataUrl = canvas ? canvas.toDataURL('image/jpeg', 0.8) : e.target.result;
 
-      // 检查最终大小
       if (dataUrl.length > 5 * 1024 * 1024) {
         alert('图片过大，请选择较小的图片');
         return;
@@ -368,25 +526,21 @@ function setupKeyboard() {
   let spacePressed = false;
 
   window.addEventListener('keydown', (e) => {
-    // 空格 -> 平移模式
     if (e.code === 'Space' && !spacePressed) {
       spacePressed = true;
       engine.setSpacePressed(true);
       e.preventDefault();
     }
 
-    // Ctrl/Cmd + Z -> 撤销
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
       e.preventDefault();
       yjsSync.undoLastStroke();
     }
 
-    // B -> 画笔
     if (e.key === 'b' || e.key === 'B') {
       setTool('pen');
     }
 
-    // E -> 橡皮
     if (e.key === 'e' || e.key === 'E') {
       setTool('eraser');
     }
@@ -405,11 +559,11 @@ function setupKeyboard() {
 function updateUserList(users) {
   const userList = document.getElementById('user-list');
   const onlineCount = document.getElementById('online-count');
+  const dropdownList = document.getElementById('user-dropdown-list');
 
-  // 更新在线人数
   onlineCount.textContent = `${users.length} 人在线`;
 
-  // 更新头像列表（最多显示 8 个）
+  // 头像列表
   userList.innerHTML = '';
   const displayUsers = users.slice(0, 8);
   for (const user of displayUsers) {
@@ -421,13 +575,34 @@ function updateUserList(users) {
     userList.appendChild(avatar);
   }
 
-  // 如果超过 8 人，显示 +N
   if (users.length > 8) {
     const more = document.createElement('div');
     more.className = 'user-avatar';
     more.style.background = '#92400e';
     more.textContent = `+${users.length - 8}`;
     userList.appendChild(more);
+  }
+
+  // 下拉面板完整列表
+  if (dropdownList) {
+    dropdownList.innerHTML = '';
+    for (const user of users) {
+      const item = document.createElement('div');
+      item.className = 'user-dropdown-item';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'user-avatar';
+      avatar.style.background = user.color;
+      avatar.textContent = user.name.charAt(0).toUpperCase();
+
+      const name = document.createElement('span');
+      name.className = 'user-dropdown-name';
+      name.textContent = user.name;
+
+      item.appendChild(avatar);
+      item.appendChild(name);
+      dropdownList.appendChild(item);
+    }
   }
 }
 
@@ -460,4 +635,5 @@ function setupResponsive() {
 
 // ===== 启动 =====
 
-initNicknameEntry();
+initLayout();
+initAuthEntry();
