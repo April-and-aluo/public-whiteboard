@@ -131,7 +131,7 @@ export class CanvasEngine {
 
   _onPointerDown(e) {
     e.preventDefault();
-    this.mainCanvas.setPointerCapture(e.pointerId);
+    try { this.mainCanvas.setPointerCapture(e.pointerId); } catch (_) {}
 
     const point = this._getCanvasPoint(e);
     this.pointers.set(e.pointerId, {
