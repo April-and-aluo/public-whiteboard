@@ -141,15 +141,38 @@ export class YjsSync {
       }
     }, 100);
 
-    // 接收远程 awareness
+    // 接收远程 awareness（带时间戳，用于过期清理）
     this._bcAwarenessStates = new Map();
     this._bcAwareness = (data) => {
-      this._bcAwarenessStates.set(data.clientId, data.state);
+      // state 为 null 表示该用户已离开
+      if (data.state === null) {
+        this._bcAwarenessStates.delete(data.clientId);
+      } else {
+        this._bcAwarenessStates.set(data.clientId, {
+          ...data.state,
+          _ts: Date.now(),
+        });
+      }
       // 触发 awareness 变化回调
       if (this.onAwarenessChange) {
         this.onAwarenessChange(this.getOnlineUsers());
       }
     };
+
+    // 定期清理过期的 BroadcastChannel awareness 状态（超过5秒未更新视为离线）
+    this._bcCleanupTimer = setInterval(() => {
+      let changed = false;
+      const now = Date.now();
+      for (const [clientId, state] of this._bcAwarenessStates) {
+        if (now - state._ts > 5000) {
+          this._bcAwarenessStates.delete(clientId);
+          changed = true;
+        }
+      }
+      if (changed && this.onAwarenessChange) {
+        this.onAwarenessChange(this.getOnlineUsers());
+      }
+    }, 2000);
 
     console.log('[Yjs] BroadcastChannel 已启用（跨标签页同步）');
   }
@@ -472,9 +495,12 @@ export class YjsSync {
       }
     }
 
-    // 从 BroadcastChannel 获取其他标签页的用户
+    // 从 BroadcastChannel 获取其他标签页的用户（过滤过期状态）
     if (this._bcAwarenessStates) {
+      const now = Date.now();
       for (const [clientId, state] of this._bcAwarenessStates) {
+        // 跳过超过5秒未更新的状态（已离线）
+        if (state._ts && now - state._ts > 5000) continue;
         const user = state.user;
         if (user && !users.find(u => u.userId === user.userId)) {
           users.push({
@@ -555,9 +581,24 @@ export class YjsSync {
 
   // 断开连接
   disconnect() {
+    // 通过 BroadcastChannel 发送离开消息
+    if (this.bcChannel && this.userName) {
+      this.bcChannel.postMessage({
+        type: 'awareness',
+        data: {
+          clientId: this.userId,
+          state: null, // null 表示离开
+        },
+      });
+    }
+
     if (this._bcAwarenessTimer) {
       clearInterval(this._bcAwarenessTimer);
       this._bcAwarenessTimer = null;
+    }
+    if (this._bcCleanupTimer) {
+      clearInterval(this._bcCleanupTimer);
+      this._bcCleanupTimer = null;
     }
     if (this.bcChannel) {
       this.bcChannel.close();

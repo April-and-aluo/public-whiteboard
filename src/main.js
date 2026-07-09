@@ -417,6 +417,15 @@ function startApp(userName) {
   setupUserListToggle();
   setupImagePropsPanel();
 
+  // 页面关闭时断开连接，通知其他用户
+  window.addEventListener('beforeunload', () => {
+    yjsSync.disconnect();
+  });
+  // 移动端 Safari 兼容
+  window.addEventListener('pagehide', () => {
+    yjsSync.disconnect();
+  });
+
   // 进入画板后检查公告
   checkAnnouncement();
 }
