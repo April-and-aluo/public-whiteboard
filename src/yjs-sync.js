@@ -103,26 +103,43 @@ export class YjsSync {
       const msg = event.data;
       if (msg.type === 'sync' && msg.update) {
         Y.applyUpdate(this.doc, new Uint8Array(msg.update), this.bcChannel);
-      } else if (msg.type === 'awareness' && this.provider) {
-        // 转发 awareness 信息
+        if (this.onDataChange) this.onDataChange('sync');
+      } else if (msg.type === 'awareness') {
         this._bcAwareness(msg.data);
       }
     };
 
     // 广播 awareness
     this._bcAwarenessTimer = setInterval(() => {
-      if (this.provider && this.provider.awareness) {
-        const states = this.provider.awareness.getStates();
-        const localId = this.provider.awareness.clientID;
-        const localState = states.get(localId);
-        if (localState) {
-          this.bcChannel.postMessage({
-            type: 'awareness',
-            data: { clientId: localId, state: localState },
-          });
-        }
+      if (this.bcChannel && this.userName) {
+        this.bcChannel.postMessage({
+          type: 'awareness',
+          data: {
+            clientId: this.userId,
+            state: {
+              user: { name: this.userName, color: this.userColor, userId: this.userId },
+              cursor: this._lastCursor || null,
+            },
+          },
+        });
       }
-    }, 500);
+    }, 1000);
+
+    // 立即广播一次
+    setTimeout(() => {
+      if (this.bcChannel && this.userName) {
+        this.bcChannel.postMessage({
+          type: 'awareness',
+          data: {
+            clientId: this.userId,
+            state: {
+              user: { name: this.userName, color: this.userColor, userId: this.userId },
+              cursor: this._lastCursor || null,
+            },
+          },
+        });
+      }
+    }, 100);
 
     // 接收远程 awareness
     this._bcAwarenessStates = new Map();
@@ -353,8 +370,9 @@ export class YjsSync {
 
   // 更新光标位置
   updateCursor(x, y) {
+    this._lastCursor = (x !== null && y !== null) ? { x, y } : null;
     if (this.provider) {
-      this.provider.awareness.setLocalStateField('cursor', { x, y });
+      this.provider.awareness.setLocalStateField('cursor', this._lastCursor);
     }
     // 通过 BroadcastChannel 广播光标
     if (this.bcChannel) {
@@ -364,7 +382,7 @@ export class YjsSync {
           clientId: this.userId,
           state: {
             user: { name: this.userName, color: this.userColor, userId: this.userId },
-            cursor: { x, y },
+            cursor: this._lastCursor,
           },
         },
       });
