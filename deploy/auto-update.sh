@@ -87,7 +87,7 @@ done
 for file in "${SERVER_FILES[@]}"; do
   filename=$(basename "$file")
   url="https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@${LATEST_HASH}/${file}"
-  target="$WORK_DIR/$filename"
+  target="$WORK_DIR/server.js"
   
   curl -sL "$url" > "$target.tmp" 2>/dev/null
   if [ -s "$target.tmp" ]; then
