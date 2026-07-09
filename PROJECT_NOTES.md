@@ -113,6 +113,27 @@ curl -sL "https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@<HASH>/sr
 - **问题**：canvas 上绘制的编辑按钮无法通过 DOM 事件点击，需要手动计算位置进行命中测试。
 - **解决**：使用 `_getEditButtonWorldPos()` 计算世界坐标位置，`_hitTestEditButton()` 进行 18px 半径的命中测试。文字宽度通过 `ctx.measureText()` 计算。
 
+### 5.12 拖拽动画不连续
+- **问题**：拖拽图片/文字时画面不流畅，拖拽过程中没有实时动画。
+- **原因**：`onDragMove` 回调只更新了 Yjs 数据，渲染依赖异步 `onDataChange` → `requestAnimationFrame` 路径，导致延迟。
+- **解决**：在 `onDragMove` 中更新 Yjs 数据后，立即同步更新 `engine.selectedImage/Text` 并调用 `engine.render()`，不等待异步回调。
+- **验证**：通过 Canvas `clearRect` 计数器验证，每次 `pointermove` 触发恰好 1 次 render。
+
+### 5.13 绘画过程无实时动画
+- **问题**：用户绘画时笔画不实时显示，只有画完后才出现。
+- **原因**：`_onPointerMove` 中 `onCursorMove` 在每次 `pointermove` 都发送 WebSocket 消息（awareness 更新 + BroadcastChannel），阻塞主线程导致 `_continueDrawing` → `render()` 延迟执行。
+- **解决**：在 `canvas-engine.js` 构造函数中添加 `_lastCursorSync` 时间戳，在 `_onPointerMove` 中对光标同步添加 50ms 节流。
+- **验证**：通过 `clearRect` 计数器验证，6 次 `pointermove` 各触发 1 次 render，共 8 次（含 pointerdown 和 pointerup）。
+
+### 5.14 文字创建非实时
+- **问题**：文字工具点击画布后弹出输入框，用户输入完成后点"确认"才在画布显示文字。
+- **原因**：`onTextPlace` 只记录位置并显示输入框，Yjs 文字元素在 `confirmTextEditor` 时才创建。
+- **解决**：
+  1. `onTextPlace` 立即调用 `yjsSync.addText()` 创建空内容文字元素
+  2. 输入框添加 `input` 事件监听器，每次输入实时调用 `yjsSync.updateTextProps(id, { content })`
+  3. 取消/ESC/切换工具时删除空内容文字元素
+- **验证**：在浏览器中输入"实时"和"实时文字创建测试"，文字均实时显示在画布上。
+
 ---
 
 ## 6. 高效方法
