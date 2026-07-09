@@ -268,6 +268,10 @@
     </div>
   </div>
 
+  <!-- 配置 WebSocket 服务器地址（与 HTTP 同端口） -->
+  <script>
+    window.WS_URL = `ws://${window.location.host}`;
+  </script>
   <script type="module" src="main.js"></script>
 </body>
 </html>

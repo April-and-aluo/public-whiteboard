@@ -921,6 +921,8 @@ function showTextEditor(screenX, screenY, initialText) {
   editor.style.top = screenY + 'px';
   input.value = initialText;
   editor.classList.remove('hidden');
+  // 隐藏"点击画布添加文字"提示
+  document.getElementById('text-placement').classList.add('hidden');
   setTimeout(() => input.focus(), 50);
 }
 
