@@ -1,14 +1,14 @@
 // ============================================
 // config.js - 部署配置
 // ============================================
-// 部署后修改此文件中的 WS_URL 为你的 WebSocket 服务器地址
-// 然后重新推送到 GitHub
+// WebSocket 服务器地址
+// 当前使用 Yjs 官方公共服务器（稳定，免费）
 //
-// 示例:
-//   Fly.io:   'wss://whiteboard-server.fly.dev'
-//   Render:   'wss://whiteboard-server.onrender.com'
+// 如需自建服务器，修改为你的地址：
+//   Render:   'wss://your-app.onrender.com'
+//   Fly.io:   'wss://your-app.fly.dev'
 //
-// 留空则使用 y-webrtc P2P 模式（公共信令服务器）
+// 留空则使用 y-webrtc P2P 模式
 // ============================================
 
-window.WS_URL = '';  // ← 在这里填入你的 WebSocket 服务器地址
+window.WS_URL = 'wss://demos.yjs.dev/ws';
