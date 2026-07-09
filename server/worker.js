@@ -1,8 +1,7 @@
 // Cloudflare Worker - WebSocket 中继服务器
-// 部署到 Cloudflare Workers 免费计划
 // 使用 Durable Objects 维护 WebSocket 连接状态
+// 免费计划支持，不休眠，全球边缘部署
 
-// Durable Object - 管理单个房间的连接
 export class WhiteboardRoom {
   constructor(state, env) {
     this.state = state;
@@ -11,6 +10,12 @@ export class WhiteboardRoom {
   }
 
   async fetch(request) {
+    // 创建 WebSocket 对
+    const upgradeHeader = request.headers.get("Upgrade");
+    if (!upgradeHeader || upgradeHeader !== "websocket") {
+      return new Response("Expected WebSocket", { status: 426 });
+    }
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
@@ -18,16 +23,20 @@ export class WhiteboardRoom {
     server.accept();
     this.sessions.add(server);
 
-    // 转发消息
+    // 转发消息给房间内其他客户端
     server.addEventListener("message", (event) => {
       for (const ws of this.sessions) {
         if (ws !== server) {
-          try { ws.send(event.data); } catch (e) {}
+          try {
+            ws.send(event.data);
+          } catch (e) {
+            this.sessions.delete(ws);
+          }
         }
       }
     });
 
-    // 清理
+    // 清理断开连接
     server.addEventListener("close", () => {
       this.sessions.delete(server);
     });
@@ -46,13 +55,15 @@ export default {
 
     // 健康检查
     if (url.pathname === "/health") {
-      return new Response(JSON.stringify({ status: "ok", timestamp: Date.now() }), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ status: "ok", timestamp: Date.now() }),
+        { headers: { "Content-Type": "application/json" } }
+      );
     }
 
     // 非 WebSocket 请求
-    if (request.headers.get("Upgrade") !== "websocket") {
+    const upgradeHeader = request.headers.get("Upgrade");
+    if (!upgradeHeader || upgradeHeader !== "websocket") {
       return new Response("Public Whiteboard WebSocket Server", {
         headers: { "Content-Type": "text/plain" },
       });

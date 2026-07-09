@@ -1,10 +1,11 @@
 // ============================================
 // config.js - 部署配置
 // ============================================
-// WebSocket 服务器地址
-// 部署在 Cloudflare Workers（免费，不休眠，全球边缘）
+// WebSocket 服务器地址（跨设备同步）
+// 留空则使用 BroadcastChannel（跨标签页）+ WebRTC P2P（跨设备）
 //
-// 如需更换，修改为你的地址即可
+// 如有自建服务器，填入地址：
+//   window.WS_URL = 'wss://your-server.com';
 // ============================================
 
-window.WS_URL = 'wss://whiteboard-ws.imaginary-swordfish.workers.dev';
+window.WS_URL = '';

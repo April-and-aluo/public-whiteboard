@@ -64,11 +64,14 @@ export class YjsSync {
     this.strokes = this.doc.getArray('strokes');
     this.images = this.doc.getArray('images');
 
-    // 优先使用 WebSocket 服务器（更稳定，不受 NAT 影响）
+    // 始终启用 BroadcastChannel（同浏览器跨标签页同步）
+    this._setupBroadcastChannel();
+
+    // 尝试连接 WebSocket 服务器（跨设备同步）
     if (WS_URL) {
       this._connectWebSocket();
     } else {
-      // 回退到 y-webrtc P2P 模式（无需自建服务器）
+      // 无 WebSocket 服务器时，使用 WebRTC P2P 模式
       this._connectWebRTC();
     }
 
@@ -81,6 +84,57 @@ export class YjsSync {
     this.images.observe(() => {
       if (this.onDataChange) this.onDataChange('images');
     });
+  }
+
+  // 设置 BroadcastChannel（同浏览器跨标签页同步）
+  _setupBroadcastChannel() {
+    const channelName = 'whiteboard-' + this.roomId;
+    this.bcChannel = new BroadcastChannel(channelName);
+
+    // 广播本地文档更新
+    this.doc.on('update', (update, origin) => {
+      // 只广播本地产生的更新，避免循环
+      if (origin === this.bcChannel || origin === 'remote') return;
+      this.bcChannel.postMessage({ type: 'sync', update: Y.encodeStateAsUpdate(this.doc) });
+    });
+
+    // 接收远程更新
+    this.bcChannel.onmessage = (event) => {
+      const msg = event.data;
+      if (msg.type === 'sync' && msg.update) {
+        Y.applyUpdate(this.doc, new Uint8Array(msg.update), this.bcChannel);
+      } else if (msg.type === 'awareness' && this.provider) {
+        // 转发 awareness 信息
+        this._bcAwareness(msg.data);
+      }
+    };
+
+    // 广播 awareness
+    this._bcAwarenessTimer = setInterval(() => {
+      if (this.provider && this.provider.awareness) {
+        const states = this.provider.awareness.getStates();
+        const localId = this.provider.awareness.clientID;
+        const localState = states.get(localId);
+        if (localState) {
+          this.bcChannel.postMessage({
+            type: 'awareness',
+            data: { clientId: localId, state: localState },
+          });
+        }
+      }
+    }, 500);
+
+    // 接收远程 awareness
+    this._bcAwarenessStates = new Map();
+    this._bcAwareness = (data) => {
+      this._bcAwarenessStates.set(data.clientId, data.state);
+      // 触发 awareness 变化回调
+      if (this.onAwarenessChange) {
+        this.onAwarenessChange(this.getOnlineUsers());
+      }
+    };
+
+    console.log('[Yjs] BroadcastChannel 已启用（跨标签页同步）');
   }
 
   // WebSocket 模式连接（推荐，生产环境）
@@ -299,55 +353,133 @@ export class YjsSync {
 
   // 更新光标位置
   updateCursor(x, y) {
-    if (!this.provider) return;
-    this.provider.awareness.setLocalStateField('cursor', { x, y });
+    if (this.provider) {
+      this.provider.awareness.setLocalStateField('cursor', { x, y });
+    }
+    // 通过 BroadcastChannel 广播光标
+    if (this.bcChannel) {
+      this.bcChannel.postMessage({
+        type: 'awareness',
+        data: {
+          clientId: this.userId,
+          state: {
+            user: { name: this.userName, color: this.userColor, userId: this.userId },
+            cursor: { x, y },
+          },
+        },
+      });
+    }
   }
 
   // 清除光标
   clearCursor() {
-    if (!this.provider) return;
-    this.provider.awareness.setLocalStateField('cursor', null);
+    if (this.provider) {
+      this.provider.awareness.setLocalStateField('cursor', null);
+    }
+    if (this.bcChannel) {
+      this.bcChannel.postMessage({
+        type: 'awareness',
+        data: {
+          clientId: this.userId,
+          state: {
+            user: { name: this.userName, color: this.userColor, userId: this.userId },
+            cursor: null,
+          },
+        },
+      });
+    }
   }
 
   // 获取所有在线用户信息
   getOnlineUsers() {
-    if (!this.provider) return [];
-    const states = this.provider.awareness.getStates();
     const users = [];
-    for (const [clientId, state] of states) {
-      const user = state.user;
-      if (user) {
-        users.push({
-          clientId,
-          name: user.name,
-          color: user.color,
-          userId: user.userId,
-          cursor: state.cursor,
-        });
+
+    // 从 provider awareness 获取
+    if (this.provider) {
+      const states = this.provider.awareness.getStates();
+      for (const [clientId, state] of states) {
+        const user = state.user;
+        if (user) {
+          users.push({
+            clientId,
+            name: user.name,
+            color: user.color,
+            userId: user.userId,
+            cursor: state.cursor,
+          });
+        }
       }
     }
+
+    // 从 BroadcastChannel 获取其他标签页的用户
+    if (this._bcAwarenessStates) {
+      for (const [clientId, state] of this._bcAwarenessStates) {
+        const user = state.user;
+        if (user && !users.find(u => u.userId === user.userId)) {
+          users.push({
+            clientId,
+            name: user.name,
+            color: user.color,
+            userId: user.userId,
+            cursor: state.cursor,
+          });
+        }
+      }
+    }
+
+    // 如果没有其他用户，至少显示自己
+    if (users.length === 0 && this.userName) {
+      users.push({
+        clientId: 'self',
+        name: this.userName,
+        color: this.userColor,
+        userId: this.userId,
+        cursor: null,
+      });
+    }
+
     return users;
   }
 
   // 获取所有远程用户（非本地）的光标
   getRemoteCursors() {
-    if (!this.provider) return [];
-    const states = this.provider.awareness.getStates();
-    const localId = this.provider.awareness.clientID;
     const cursors = [];
-    for (const [clientId, state] of states) {
-      if (clientId === localId) continue;
-      const user = state.user;
-      const cursor = state.cursor;
-      if (user && cursor) {
-        cursors.push({
-          clientId,
-          name: user.name,
-          color: user.color,
-          cursor,
-        });
+
+    // 从 provider awareness 获取
+    if (this.provider) {
+      const states = this.provider.awareness.getStates();
+      const localId = this.provider.awareness.clientID;
+      for (const [clientId, state] of states) {
+        if (clientId === localId) continue;
+        const user = state.user;
+        const cursor = state.cursor;
+        if (user && cursor) {
+          cursors.push({
+            clientId,
+            name: user.name,
+            color: user.color,
+            cursor,
+          });
+        }
       }
     }
+
+    // 从 BroadcastChannel 获取其他标签页的光标
+    if (this._bcAwarenessStates) {
+      for (const [clientId, state] of this._bcAwarenessStates) {
+        const user = state.user;
+        const cursor = state.cursor;
+        if (user && cursor && user.userId !== this.userId) {
+          cursors.push({
+            clientId,
+            name: user.name,
+            color: user.color,
+            cursor,
+          });
+        }
+      }
+    }
+
     return cursors;
   }
 
@@ -362,6 +494,14 @@ export class YjsSync {
 
   // 断开连接
   disconnect() {
+    if (this._bcAwarenessTimer) {
+      clearInterval(this._bcAwarenessTimer);
+      this._bcAwarenessTimer = null;
+    }
+    if (this.bcChannel) {
+      this.bcChannel.close();
+      this.bcChannel = null;
+    }
     if (this.provider) {
       this.provider.disconnect();
       this.provider.destroy();
