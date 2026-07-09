@@ -1238,29 +1238,49 @@ html, body {
     justify-content: center;
   }
 
-  /* 默认折叠选项行 */
+  /* 折叠时：隐藏选项行、操作行（undo/export）和分隔线 */
   body.layout-mobile-v2 .toolbar.options-collapsed .tool-options-row,
-  body.layout-mobile-v2 .toolbar.options-collapsed .tool-options-divider {
+  body.layout-mobile-v2 .toolbar.options-collapsed .tool-options-divider,
+  body.layout-mobile-v2 .toolbar.options-collapsed .tool-actions-row #undo-btn,
+  body.layout-mobile-v2 .toolbar.options-collapsed .tool-actions-row #export-btn,
+  body.layout-mobile-v2 .toolbar.options-collapsed > .tool-divider {
     display: none;
   }
 
-  /* 折叠时不换行，避免多出空白行 */
+  /* 折叠时不换行，只有主工具+更多按钮 */
   body.layout-mobile-v2 .toolbar.options-collapsed {
     flex-wrap: nowrap;
   }
 
-  /* 展开时选项行换到第二行 */
+  /* 展开时：选项行和操作行换到第二行 */
   body.layout-mobile-v2 .toolbar:not(.options-collapsed) .tool-options-row {
     display: flex;
-    width: 100%;
     justify-content: center;
     order: 10;
   }
   body.layout-mobile-v2 .toolbar:not(.options-collapsed) .tool-options-divider {
     display: block;
-    width: 100%;
-    height: 1.5px;
+    width: 1.5px;
+    height: 28px;
+    align-self: center;
     order: 9;
+  }
+  /* 操作行也放到第二行 */
+  body.layout-mobile-v2 .toolbar:not(.options-collapsed) .tool-actions-row {
+    order: 11;
+  }
+  body.layout-mobile-v2 .toolbar:not(.options-collapsed) .tool-actions-row #undo-btn,
+  body.layout-mobile-v2 .toolbar:not(.options-collapsed) .tool-actions-row #export-btn {
+    display: flex;
+  }
+  /* 展开时主工具行占满第一行 */
+  body.layout-mobile-v2 .toolbar:not(.options-collapsed) .tool-main-row {
+    width: 100%;
+    justify-content: center;
+  }
+  /* 折叠状态下 more 按钮跟在主工具后面 */
+  body.layout-mobile-v2 .toolbar.options-collapsed .tool-actions-row {
+    order: 5;
   }
 
   /* 触摸友好的按钮尺寸 */

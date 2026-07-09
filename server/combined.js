@@ -156,6 +156,82 @@ function verifyToken(token) {
 }
 
 // ============================================
+// Y.Doc 持久化 - 文件存储
+// ============================================
+const PERSIST_DIR = path.join(DATA_DIR, 'ydocs');
+
+if (!fs.existsSync(PERSIST_DIR)) {
+  fs.mkdirSync(PERSIST_DIR, { recursive: true });
+}
+
+// 房间名 -> 安全的文件名（只保留字母数字和连字符）
+function sanitizeDocName(name) {
+  return name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+}
+
+function getDocFilePath(docName) {
+  return path.join(PERSIST_DIR, sanitizeDocName(docName) + '.ydoc');
+}
+
+// 从文件加载 Y.Doc 状态
+function loadDocFromDisk(docName, doc) {
+  const filePath = getDocFilePath(docName);
+  try {
+    if (!fs.existsSync(filePath)) return false;
+    const data = fs.readFileSync(filePath);
+    if (data.length > 0) {
+      const update = new Uint8Array(data);
+      Y.applyUpdate(doc, update);
+      console.log(`[持久化] 已加载房间 "${docName}" 的数据 (${data.length} bytes)`);
+      return true;
+    }
+  } catch (err) {
+    console.error(`[持久化] 加载房间 "${docName}" 数据失败:`, err.message);
+  }
+  return false;
+}
+
+// 保存 Y.Doc 状态到文件（原子写入）
+function saveDocToDisk(docName, doc) {
+  const filePath = getDocFilePath(docName);
+  try {
+    const update = Y.encodeStateAsUpdate(doc);
+    const tmpFile = filePath + '.tmp';
+    fs.writeFileSync(tmpFile, Buffer.from(update));
+    fs.renameSync(tmpFile, filePath);
+  } catch (err) {
+    console.error(`[持久化] 保存房间 "${docName}" 数据失败:`, err.message);
+  }
+}
+
+// 防抖保存：每个房间独立的保存定时器
+const saveTimers = new Map();
+const SAVE_DEBOUNCE_MS = 2000;
+
+function debouncedSaveDoc(docName, doc) {
+  if (saveTimers.has(docName)) {
+    clearTimeout(saveTimers.get(docName));
+  }
+  saveTimers.set(docName, setTimeout(() => {
+    saveTimers.delete(docName);
+    saveDocToDisk(docName, doc);
+  }, SAVE_DEBOUNCE_MS));
+}
+
+// 保存所有房间数据到磁盘（用于优雅关闭）
+function saveAllDocs() {
+  for (const [docName, doc] of docs) {
+    // 清除待执行的防抖定时器，立即保存
+    if (saveTimers.has(docName)) {
+      clearTimeout(saveTimers.get(docName));
+      saveTimers.delete(docName);
+    }
+    saveDocToDisk(docName, doc);
+  }
+  console.log(`[持久化] 已保存 ${docs.size} 个房间的数据到磁盘`);
+}
+
+// ============================================
 // 房间管理 - 每个房间维护一个 Y.Doc
 // ============================================
 const docs = new Map();
@@ -168,6 +244,12 @@ function getYDoc(docName, gc = true) {
     // awareness - 使用 Map 存储每个客户端的状态
     doc.awareness = new awarenessProtocol.Awareness(doc);
     doc.conns = new Map();
+    // 从磁盘加载持久化数据
+    loadDocFromDisk(docName, doc);
+    // 监听文档更新 -> 防抖保存到磁盘
+    doc.on('update', () => {
+      debouncedSaveDoc(docName, doc);
+    });
     docs.set(docName, doc);
   }
   return doc;
@@ -206,15 +288,19 @@ function closeConn(doc, conn) {
       doc.off('update', conn._updateHandler);
       conn._updateHandler = null;
     }
-    // 如果房间没有人了，删除文档释放内存
+    // 如果房间没有人了，保存数据到磁盘后保留文档在内存中
+    // （不再销毁，以便新用户加入时仍能获取历史数据）
     if (doc.conns.size === 0) {
+      // 立即保存最新状态到磁盘
       for (const [name, d] of docs) {
         if (d === doc) {
-          docs.delete(name);
+          saveDocToDisk(name, doc);
           break;
         }
       }
-      doc.destroy();
+      // 注意：不删除 docs 中的文档，也不调用 doc.destroy()
+      // 这样即使服务器不重启，数据也在内存中保留
+      // 防抖保存定时器仍会在需要时触发
     }
   }
   try { conn.close(); } catch (e) {}
@@ -564,6 +650,43 @@ server.listen(PORT, HOST, () => {
   console.log(`  HTTP:  http://${HOST}:${PORT}`);
   console.log(`  WS:    ws://${HOST}:${PORT}`);
   console.log(`  Health: http://${HOST}:${PORT}/health`);
+  console.log(`  Persistence: ${PERSIST_DIR}`);
   console.log(`  Started: ${new Date().toISOString()}`);
   console.log(`========================================`);
 });
+
+// ============================================
+// 优雅关闭 - 保存所有数据到磁盘
+// ============================================
+let isShuttingDown = false;
+
+function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\n[${signal}] 正在保存数据并关闭服务器...`);
+
+  // 保存所有房间数据
+  saveAllDocs();
+
+  // 关闭所有 WebSocket 连接
+  for (const doc of docs.values()) {
+    for (const conn of doc.conns.keys()) {
+      try { conn.close(); } catch (e) {}
+    }
+  }
+
+  // 关闭 HTTP 服务器
+  server.close(() => {
+    console.log('[关闭] 服务器已停止');
+    process.exit(0);
+  });
+
+  // 如果 5 秒内无法正常关闭，强制退出
+  setTimeout(() => {
+    console.error('[关闭] 超时，强制退出');
+    process.exit(1);
+  }, 5000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
