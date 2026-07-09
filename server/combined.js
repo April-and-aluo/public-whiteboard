@@ -456,8 +456,10 @@ const server = http.createServer(async (req, res) => {
         createdAt: Date.now(),
       };
       await writeUsers(users);
-      console.log(`[+] 用户注册: ${username}`);
-      sendJson(200, { ok: true, message: '注册成功' });
+      // 注册成功后直接返回 token，免去前端二次登录
+      const token = createToken(username);
+      console.log(`[+] 用户注册并登录: ${username}`);
+      sendJson(200, { ok: true, token, username, message: '注册成功' });
       return;
     }
 

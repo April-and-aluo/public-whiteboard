@@ -64,6 +64,28 @@ function initLayout() {
 const API_BASE = window.API_URL || '';
 let authMode = 'login';
 
+// Cookie 工具函数
+function setCookie(name, value, days) {
+  const d = new Date();
+  d.setTime(d.getTime() + days * 24 * 60 * 60 * 1000);
+  document.cookie = `${name}=${encodeURIComponent(value)};expires=${d.toUTCString()};path=/;SameSite=Lax`;
+}
+
+function getCookie(name) {
+  const cname = name + '=';
+  const decoded = decodeURIComponent(document.cookie);
+  const ca = decoded.split(';');
+  for (let c of ca) {
+    c = c.trim();
+    if (c.indexOf(cname) === 0) return c.substring(cname.length);
+  }
+  return '';
+}
+
+function deleteCookie(name) {
+  document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
+}
+
 function initAuthEntry() {
   const overlay = document.getElementById('nickname-overlay');
   const usernameInput = document.getElementById('username-input');
@@ -71,9 +93,20 @@ function initAuthEntry() {
   const submitBtn = document.getElementById('auth-submit');
   const errorDiv = document.getElementById('auth-error');
   const subtitle = document.getElementById('auth-subtitle');
+  const togglePasswordBtn = document.getElementById('toggle-password');
 
-  // 先尝试自动登录
-  const savedToken = localStorage.getItem('wb_token');
+  // 密码显示/隐藏切换
+  if (togglePasswordBtn) {
+    togglePasswordBtn.addEventListener('click', () => {
+      const isPassword = passwordInput.type === 'password';
+      passwordInput.type = isPassword ? 'text' : 'password';
+      togglePasswordBtn.querySelector('.eye-open').classList.toggle('hidden', isPassword);
+      togglePasswordBtn.querySelector('.eye-closed').classList.toggle('hidden', !isPassword);
+    });
+  }
+
+  // 先尝试自动登录（优先 cookie，其次 localStorage）
+  const savedToken = getCookie('wb_token') || localStorage.getItem('wb_token');
   if (savedToken) {
     autoLogin(savedToken, overlay);
   }
@@ -125,8 +158,13 @@ function initAuthEntry() {
         return;
       }
 
-      localStorage.setItem('wb_token', data.token);
-      localStorage.setItem('wb_username', data.username);
+      // 注册或登录成功，保存 token 到 cookie 和 localStorage
+      if (data.token) {
+        setCookie('wb_token', data.token, 7);
+        setCookie('wb_username', data.username, 7);
+        localStorage.setItem('wb_token', data.token);
+        localStorage.setItem('wb_username', data.username);
+      }
 
       overlay.style.opacity = '0';
       setTimeout(() => {
@@ -168,6 +206,8 @@ async function autoLogin(token, overlay) {
         startApp(data.username);
       }, 400);
     } else {
+      deleteCookie('wb_token');
+      deleteCookie('wb_username');
       localStorage.removeItem('wb_token');
       localStorage.removeItem('wb_username');
       const usernameInput = document.getElementById('username-input');
@@ -176,6 +216,39 @@ async function autoLogin(token, overlay) {
   } catch (e) {
     const usernameInput = document.getElementById('username-input');
     if (usernameInput) setTimeout(() => usernameInput.focus(), 300);
+  }
+}
+
+// ===== 公告功能 =====
+
+async function checkAnnouncement() {
+  try {
+    const resp = await fetch('https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/announcement.json?t=' + Date.now());
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    // 检查是否已经看过这个版本的公告
+    const seenVersion = getCookie('wb_announcement') || localStorage.getItem('wb_announcement');
+    if (seenVersion === data.version) return;
+
+    // 显示公告
+    const overlay = document.getElementById('announcement-overlay');
+    const body = document.getElementById('announcement-body');
+    if (!overlay || !body) return;
+
+    body.textContent = data.content || '';
+    overlay.classList.remove('hidden');
+
+    // 关闭按钮
+    const closeBtn = document.getElementById('announcement-close');
+    const close = () => {
+      overlay.classList.add('hidden');
+      setCookie('wb_announcement', data.version, 365);
+      localStorage.setItem('wb_announcement', data.version);
+    };
+    closeBtn.onclick = close;
+  } catch (e) {
+    // 公告加载失败不影响正常使用
   }
 }
 
@@ -314,6 +387,9 @@ function startApp(userName) {
   setupKeyboard();
   setupResponsive();
   setupUserListToggle();
+
+  // 进入画板后检查公告
+  checkAnnouncement();
 }
 
 // ===== 点到笔画距离计算 =====
