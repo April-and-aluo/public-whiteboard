@@ -776,6 +776,28 @@ const server = http.createServer(async (req, res) => {
 // ============================================
 const wss = new WebSocketServer({ server, maxPayload: 2 * 1024 * 1024 }); // 单条消息最大 2MB
 
+// ============================================
+// 心跳检测：定期 ping 所有连接，清理死连接
+// ============================================
+const HEARTBEAT_INTERVAL = 30000; // 30 秒检查一次
+const HEARTBEAT_TIMEOUT = 60000;  // 60 秒无响应视为断开
+
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      // 上次 ping 后未收到 pong，说明连接已死
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, HEARTBEAT_INTERVAL);
+
+wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+});
+
 // 每个房间最大连接数
 const MAX_CONNECTIONS_PER_ROOM = 50;
 
