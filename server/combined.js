@@ -795,13 +795,9 @@ function getTokenFromURL(url) {
 }
 
 wss.on('connection', (ws, req) => {
-  // 验证 token
+  // 验证 token（如有）；无 token 时允许作为访客连接
   const token = getTokenFromURL(req.url);
   const tokenRecord = verifyToken(token);
-  if (!tokenRecord) {
-    ws.close(4001, '未授权：token 无效或已过期');
-    return;
-  }
 
   const roomName = getRoomName(req.url);
 
@@ -812,8 +808,8 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
-  // 将用户名绑定到连接上，便于审计
-  ws._username = tokenRecord.username;
+  // 将用户名绑定到连接上，便于审计（访客标记为 guest）
+  ws._username = tokenRecord ? tokenRecord.username : 'guest';
   setupWSConnection(ws, req, roomName);
 });
 

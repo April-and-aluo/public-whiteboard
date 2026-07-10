@@ -186,11 +186,11 @@ export class YjsSync {
   // WebSocket 模式连接（推荐，生产环境）
   _connectWebSocket() {
     try {
-      // 构建 URL：附加 token query 参数用于认证
-      const wsUrl = WS_URL + (WS_URL.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(this._authToken || '');
-
-      this.provider = new WebsocketProvider(wsUrl, this.roomId, this.doc, {
+      // 通过 params 传递 token，y-websocket 会正确拼接到 URL 末尾：
+      // ws://host:port/roomname?token=xxx
+      this.provider = new WebsocketProvider(WS_URL, this.roomId, this.doc, {
         connect: true,
+        params: this._authToken ? { token: this._authToken } : {},
       });
 
       let wsConnected = false;
