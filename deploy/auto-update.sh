@@ -36,12 +36,19 @@ log() {
 }
 
 # 获取 GitHub 最新 commit hash
-# 使用认证 token 避免 API 限流（token 通过环境变量 GH_TOKEN 传入）
+# 优先使用 jsDelivr API（不限流），回退到 GitHub API（带认证）
 AUTH_HEADER=""
 if [ -n "$GH_TOKEN" ]; then
   AUTH_HEADER="-H \"Authorization: token ${GH_TOKEN}\""
 fi
-LATEST_HASH=$(curl -s ${AUTH_HEADER} "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}" | grep '"sha"' | head -1 | cut -d'"' -f4)
+
+# 方法1: 通过 jsDelivr API 获取最新版本（不消耗 GitHub API 配额）
+LATEST_HASH=$(curl -s "https://data.jsdelivr.com/v1/packages/gh/${REPO_OWNER}/${REPO_NAME}/resolved" 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+# 方法2: 如果 jsDelivr 失败，回退到 GitHub API
+if [ -z "$LATEST_HASH" ]; then
+  LATEST_HASH=$(curl -s ${AUTH_HEADER} "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}" | grep '"sha"' | head -1 | cut -d'"' -f4)
+fi
 
 if [ -z "$LATEST_HASH" ]; then
   log "ERROR: 无法获取 GitHub commit hash"
