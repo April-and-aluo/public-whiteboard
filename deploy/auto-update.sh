@@ -46,18 +46,21 @@ log() {
 }
 
 # 获取 GitHub 最新 commit hash
-# 优先使用 jsDelivr API（不限流），回退到 GitHub API（带认证）
-AUTH_HEADER=""
-if [ -n "$GH_TOKEN" ]; then
-  AUTH_HEADER="-H \"Authorization: token ${GH_TOKEN}\""
+# 方法1: jsDelivr API（不限流）— 匹配 "version":"hash"（跳过 null）
+LATEST_HASH=$(curl -s "https://data.jsdelivr.com/v1/packages/gh/${REPO_OWNER}/${REPO_NAME}/resolved" 2>/dev/null | grep -o '"version": *"[^"]*"' | head -1 | grep -o '[a-f0-9]\{7,\}' | head -1)
+
+# 方法2: GitHub API（需要认证以避免限流）
+if [ -z "$LATEST_HASH" ]; then
+  if [ -n "$GH_TOKEN" ]; then
+    LATEST_HASH=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}" 2>/dev/null | grep '"sha"' | head -1 | cut -d'"' -f4)
+  else
+    LATEST_HASH=$(curl -s "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}" 2>/dev/null | grep '"sha"' | head -1 | cut -d'"' -f4)
+  fi
 fi
 
-# 方法1: 通过 jsDelivr API 获取最新版本（不消耗 GitHub API 配额）
-LATEST_HASH=$(curl -s "https://data.jsdelivr.com/v1/packages/gh/${REPO_OWNER}/${REPO_NAME}/resolved" 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-# 方法2: 如果 jsDelivr 失败，回退到 GitHub API
+# 方法3: git ls-remote（最可靠，不消耗 API 配额）
 if [ -z "$LATEST_HASH" ]; then
-  LATEST_HASH=$(curl -s ${AUTH_HEADER} "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}" | grep '"sha"' | head -1 | cut -d'"' -f4)
+  LATEST_HASH=$(git ls-remote "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "refs/heads/${BRANCH}" 2>/dev/null | cut -f1)
 fi
 
 if [ -z "$LATEST_HASH" ]; then
