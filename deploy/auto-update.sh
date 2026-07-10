@@ -28,9 +28,10 @@ FRONTEND_FILES=(
   "announcement.json"
 )
 
-# 需要同步的服务器文件
+# 需要同步的服务器文件（格式: "源文件:目标文件名"）
 SERVER_FILES=(
-  "server/combined.js"
+  "server/combined.js:server.js"
+  "server/package.json:package.json"
 )
 
 log() {
@@ -98,10 +99,11 @@ for file in "${FRONTEND_FILES[@]}"; do
 done
 
 # 下载服务器文件
-for file in "${SERVER_FILES[@]}"; do
-  filename=$(basename "$file")
+for entry in "${SERVER_FILES[@]}"; do
+  file="${entry%%:*}"
+  target_name="${entry##*:}"
   url="https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@${LATEST_HASH}/${file}"
-  target="$WORK_DIR/server.js"
+  target="$WORK_DIR/$target_name"
   
   curl -sL "$url" > "$target.tmp" 2>/dev/null
   if [ -s "$target.tmp" ]; then
@@ -118,9 +120,15 @@ done
 echo "$LATEST_HASH" > "$STATE_FILE"
 
 if [ $UPDATED -gt 0 ]; then
-  log "共更新 $UPDATED 个文件，重启服务..."
-  sudo systemctl restart whiteboard
-  log "服务已重启"
+  log "共更新 $UPDATED 个文件，安装依赖..."
+  cd "$WORK_DIR" && npm install --production 2>&1 >> "$LOG_FILE"
+  if [ $? -eq 0 ]; then
+    log "依赖安装完成，重启服务..."
+    sudo systemctl restart whiteboard
+    log "服务已重启"
+  else
+    log "ERROR: 依赖安装失败，跳过重启"
+  fi
 else
   log "无文件需要更新"
 fi

@@ -9,7 +9,10 @@
     "dev": "node server.js"
   },
   "dependencies": {
-    "ws": "^8.16.0"
+    "ws": "^8.16.0",
+    "yjs": "^13.6.31",
+    "y-protocols": "^1.0.6",
+    "lib0": "^0.2.85"
   },
   "engines": {
     "node": ">=18.0.0"
