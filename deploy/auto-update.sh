@@ -31,6 +31,7 @@ FRONTEND_FILES=(
   "src/reward-qrcode.png"
   "src/map-data/style.json"
   "src/map-data/countries.geojson"
+  "src/map-data/admin1.geojson"
   "announcement.json"
 )
 
@@ -100,7 +101,7 @@ for file in "${FRONTEND_FILES[@]}"; do
     target="$PUBLIC_DIR/$filename"
   fi
   
-  curl -sL "$url" > "$target.tmp" 2>/dev/null
+  curl -sL --max-time 120 "$url" > "$target.tmp" 2>/dev/null
   if [ -s "$target.tmp" ]; then
     mv "$target.tmp" "$target"
     log "  更新: $file -> $target"
@@ -118,7 +119,7 @@ for entry in "${SERVER_FILES[@]}"; do
   url="https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@${LATEST_HASH}/${file}"
   target="$WORK_DIR/$target_name"
   
-  curl -sL "$url" > "$target.tmp" 2>/dev/null
+  curl -sL --max-time 30 "$url" > "$target.tmp" 2>/dev/null
   if [ -s "$target.tmp" ]; then
     mv "$target.tmp" "$target"
     log "  更新: $file -> $target"
