@@ -17,10 +17,19 @@ export class MapLayer {
 
   async init() {
     try {
-      // 动态导入 MapLibre GL JS
-      const maplibregl = await import('https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js');
+      // 通过 <script> 标签加载 MapLibre GL JS（UMD 模块，import() 不兼容）
+      if (!window.maplibregl) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+          script.onload = resolve;
+          script.onerror = () => reject(new Error('MapLibre GL JS 加载失败'));
+          document.head.appendChild(script);
+        });
+      }
+      const maplibregl = window.maplibregl;
 
-      // 等待 CSS 加载
+      // 加载 CSS
       if (!document.getElementById('maplibre-css')) {
         const link = document.createElement('link');
         link.id = 'maplibre-css';
