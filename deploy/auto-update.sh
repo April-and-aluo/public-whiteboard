@@ -121,7 +121,8 @@ echo "$LATEST_HASH" > "$STATE_FILE"
 
 if [ $UPDATED -gt 0 ]; then
   log "共更新 $UPDATED 个文件，安装依赖..."
-  cd "$WORK_DIR" && npm install --production 2>&1 >> "$LOG_FILE"
+  NPM_BIN="$(dirname $(which node))/npm"
+  cd "$WORK_DIR" && "$NPM_BIN" install --production 2>&1 >> "$LOG_FILE"
   if [ $? -eq 0 ]; then
     log "依赖安装完成，重启服务..."
     sudo systemctl restart whiteboard
