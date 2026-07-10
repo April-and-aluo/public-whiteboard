@@ -127,8 +127,8 @@ export class CanvasEngine {
 
   // 屏幕坐标 -> 世界坐标
   screenToWorld(sx, sy) {
-    // 地图模式：使用 MapLibre 的投影
-    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
+    // 地图模式：使用地图层的投影
+    if (this.mapMode && this.mapLayer) {
       const lngLat = this.mapLayer.screenToLngLat(sx, sy);
       if (lngLat) {
         // 转换为墨卡托世界坐标（Y 轴向下，与屏幕坐标一致）
@@ -146,8 +146,8 @@ export class CanvasEngine {
 
   // 世界坐标 -> 屏幕坐标
   worldToScreen(wx, wy) {
-    // 地图模式：使用 MapLibre 的投影
-    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
+    // 地图模式：使用地图层的投影
+    if (this.mapMode && this.mapLayer) {
       // 世界坐标 -> 经纬度（Y 轴翻转）
       const yRad = -wy * Math.PI / 180;
       const lat = 180 / Math.PI * (2 * Math.atan(Math.exp(yRad)) - Math.PI / 2);
@@ -276,9 +276,15 @@ export class CanvasEngine {
     if (this.isPanning) {
       const dx = point.x - this.panStartX;
       const dy = point.y - this.panStartY;
-      // 地图模式：转发给 MapLibre
-      if (this.mapMode && this.mapLayer && this.mapLayer.map) {
-        this.mapLayer.map.panBy([-dx, -dy], { animate: false });
+      // 地图模式：转发给地图层
+      if (this.mapMode && this.mapLayer) {
+        if (this.mapLayer.map) {
+          // MapLibre 模式
+          this.mapLayer.map.panBy([-dx, -dy], { animate: false });
+        } else {
+          // Canvas 2D 模式：使用 panByPixels 同步地图和涂鸦层
+          this.mapLayer.panByPixels(dx, dy);
+        }
         this.panStartX = point.x;
         this.panStartY = point.y;
       } else {
@@ -373,39 +379,48 @@ export class CanvasEngine {
     e.preventDefault();
     const point = this._getCanvasPoint(e);
 
-    // 地图模式：转发给 MapLibre
-    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
-      const currentZoom = this.mapLayer.map.getZoom();
-      // 缩放因子：Ctrl+滚轮精确缩放（步幅更小）
-      let zoomDelta;
-      if (e.ctrlKey) {
-        zoomDelta = e.deltaY > 0 ? -0.1 : 0.1; // 精确缩放
+    // 地图模式：转发给地图层
+    if (this.mapMode && this.mapLayer) {
+      if (this.mapLayer.map) {
+        // MapLibre 模式
+        const currentZoom = this.mapLayer.map.getZoom();
+        let zoomDelta;
+        if (e.ctrlKey) {
+          zoomDelta = e.deltaY > 0 ? -0.1 : 0.1;
+        } else {
+          zoomDelta = e.deltaY > 0 ? -0.5 : 0.5;
+        }
+        const newZoom = Math.max(0, Math.min(this.mapLayer._maxZoom, currentZoom + zoomDelta));
+        const lngLat = this.mapLayer.screenToLngLat(point.x, point.y);
+        this.mapLayer.map.jumpTo({
+          zoom: newZoom,
+          center: lngLat ? [lngLat.lng, lngLat.lat] : undefined,
+        });
       } else {
-        zoomDelta = e.deltaY > 0 ? -0.5 : 0.5; // 普通缩放
+        // Canvas 2D 模式：使用 zoomAt 同步缩放
+        const currentZoom = this.mapLayer.fallback.zoom;
+        let zoomDelta;
+        if (e.ctrlKey) {
+          zoomDelta = e.deltaY > 0 ? -0.1 : 0.1;
+        } else {
+          zoomDelta = e.deltaY > 0 ? -0.5 : 0.5;
+        }
+        this.mapLayer.zoomAt(point.x, point.y, currentZoom + zoomDelta);
       }
-      const newZoom = Math.max(0, Math.min(8, currentZoom + zoomDelta));
-      // 以光标位置为中心缩放
-      const lngLat = this.mapLayer.screenToLngLat(point.x, point.y);
-      this.mapLayer.map.jumpTo({
-        zoom: newZoom,
-        center: lngLat ? [lngLat.lng, lngLat.lat] : undefined,
-      });
       return;
     }
 
     // 自由涂鸦模式：仿射变换缩放
     const worldBefore = this.screenToWorld(point.x, point.y);
 
-    // 缩放因子：Ctrl+滚轮精确缩放（步幅更小）
     let zoomFactor;
     if (e.ctrlKey) {
-      zoomFactor = e.deltaY > 0 ? 0.97 : 1.03; // 精确缩放：3% 步幅
+      zoomFactor = e.deltaY > 0 ? 0.97 : 1.03;
     } else {
-      zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;   // 普通缩放：10% 步幅
+      zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     }
     const newScale = Math.max(0.1, Math.min(10, this.scale * zoomFactor));
 
-    // 以光标为中心缩放
     this.scale = newScale;
     this.offsetX = point.x - worldBefore.x * this.scale;
     this.offsetY = point.y - worldBefore.y * this.scale;
@@ -476,13 +491,18 @@ export class CanvasEngine {
 
     const newScale = Math.max(0.1, Math.min(10, this.pinchStartScale * (dist / this.pinchStartDist)));
 
-    // 地图模式：转发给 MapLibre
-    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
-      // 计算缩放级别变化
+    // 地图模式：转发给地图层
+    if (this.mapMode && this.mapLayer) {
       const zoomDelta = Math.log2(dist / this.pinchStartDist);
-      const currentZoom = this.mapLayer.map.getZoom();
-      const newZoom = Math.max(0, Math.min(8, this.pinchStartZoom + zoomDelta));
-      this.mapLayer.map.jumpTo({ zoom: newZoom });
+      if (this.mapLayer.map) {
+        // MapLibre 模式
+        const newZoom = Math.max(0, Math.min(this.mapLayer._maxZoom, this.pinchStartZoom + zoomDelta));
+        this.mapLayer.map.jumpTo({ zoom: newZoom });
+      } else {
+        // Canvas 2D 模式
+        const newZoom = Math.max(0, Math.min(this.mapLayer._maxZoom, this.pinchStartZoom + zoomDelta));
+        this.mapLayer.zoomAt(currentCenter.x, currentCenter.y, newZoom);
+      }
       return;
     }
 

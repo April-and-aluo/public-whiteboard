@@ -3,7 +3,7 @@
 // ============================================
 // 在地图模式下作为画布底层的地图背景
 // 优先使用 MapLibre GL JS（WebGL），回退到 Canvas 2D
-// 仅显示行政边界和陆海边界，极简白底风格
+// 显示国家边界 + 省/州行政区划边界
 // 与上层 CanvasEngine 涂鸦层视口同步
 // ============================================
 
@@ -16,6 +16,7 @@ export class MapLayer {
     this.onViewportChange = null;
     this._initialized = false;
     this._mode = 'none';      // 'maplibre' | 'canvas2d' | 'none'
+    this._maxZoom = 13;       // 最大缩放级别
   }
 
   async init() {
@@ -56,7 +57,7 @@ export class MapLayer {
 
   // ===== MapLibre GL JS 模式 =====
   async _initMapLibre() {
-    // 通过 <script> 标签加载 MapLibre GL JS（UMD 模块，import() 不兼容）
+    // 通过 <script> 标签加载 MapLibre GL JS
     if (!window.maplibregl) {
       await new Promise((resolve, reject) => {
         const script = document.createElement('script');
@@ -112,7 +113,7 @@ export class MapLayer {
       center: [0, 20],
       zoom: 1,
       minZoom: 0,
-      maxZoom: 8,
+      maxZoom: this._maxZoom,
       attributionControl: false,
       dragPan: false,
       scrollZoom: false,
@@ -134,15 +135,11 @@ export class MapLayer {
 
   // ===== Canvas 2D 回退模式 =====
   async _initCanvas2D() {
-    // 加载 GeoJSON 数据
-    let geoData;
-    try {
-      const resp = await fetch('/map-data/countries.geojson');
-      if (!resp.ok) throw new Error('GeoJSON 加载失败');
-      geoData = await resp.json();
-    } catch (err) {
-      throw new Error('无法加载 GeoJSON: ' + err.message);
-    }
+    // 并行加载国家边界和行政区划数据
+    const [countryData, admin1Data] = await Promise.all([
+      this._loadGeoJSON('/map-data/countries.geojson'),
+      this._loadGeoJSON('/map-data/admin1.geojson'),
+    ]);
 
     // 创建地图 canvas
     const mapCanvas = document.createElement('canvas');
@@ -161,10 +158,16 @@ export class MapLayer {
     mainCanvas.style.background = 'transparent';
 
     const ctx = mapCanvas.getContext('2d');
+
+    // 预处理 GeoJSON：将跨日期变更线的多边形切割
+    const processedCountries = this._preprocessGeoJSON(countryData);
+    const processedAdmin1 = this._preprocessGeoJSON(admin1Data);
+
     this.fallback = {
       canvas: mapCanvas,
       ctx: ctx,
-      geoData: geoData,
+      countries: processedCountries,
+      admin1: processedAdmin1,
       centerLng: 0,
       centerLat: 20,
       zoom: 1,
@@ -177,10 +180,147 @@ export class MapLayer {
     this._resizeHandler = () => this._resizeFallbackCanvas();
     window.addEventListener('resize', this._resizeHandler);
 
-    console.log('[MapLayer] Canvas 2D 地图初始化完成');
+    console.log('[MapLayer] Canvas 2D 地图初始化完成 (国家:' + processedCountries.features.length + ', 行政区:' + processedAdmin1.features.length + ')');
     this._initialized = true;
     this._mode = 'canvas2d';
     this._syncToEngine();
+  }
+
+  async _loadGeoJSON(url) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('加载失败: ' + url);
+    return await resp.json();
+  }
+
+  // 预处理 GeoJSON：切割跨日期变更线的多边形
+  _preprocessGeoJSON(geoData) {
+    const result = {
+      type: 'FeatureCollection',
+      features: [],
+    };
+
+    for (const feature of geoData.features) {
+      const processed = this._splitAntimeridianFeature(feature);
+      result.features.push(...processed);
+    }
+
+    return result;
+  }
+
+  // 切割跨日期变更线的 feature
+  _splitAntimeridianFeature(feature) {
+    if (!feature.geometry) return [feature];
+
+    const geom = feature.geometry;
+    const results = [];
+
+    if (geom.type === 'Polygon') {
+      const split = this._splitAntimeridianPolygon(geom.coordinates);
+      for (const poly of split) {
+        results.push({
+          ...feature,
+          geometry: { type: 'Polygon', coordinates: poly },
+        });
+      }
+    } else if (geom.type === 'MultiPolygon') {
+      for (const polygon of geom.coordinates) {
+        const split = this._splitAntimeridianPolygon(polygon);
+        for (const poly of split) {
+          results.push({
+            ...feature,
+            geometry: { type: 'Polygon', coordinates: poly },
+          });
+        }
+      }
+    } else {
+      results.push(feature);
+    }
+
+    return results;
+  }
+
+  // 切割跨日期变更线的多边形
+  // 返回一个数组，每个元素是一个 polygon（外环+内环的数组）
+  _splitAntimeridianPolygon(polygon) {
+    // polygon = [outerRing, hole1, hole2, ...]
+    const splitRings = [];
+    for (const ring of polygon) {
+      const split = this._splitAntimeridianRing(ring);
+      splitRings.push(split);
+    }
+
+    // 外环可能被拆分成多段，每段形成一个新多边形
+    const outerParts = splitRings[0];
+    const holes = splitRings.slice(1);
+
+    const result = [];
+    for (const outer of outerParts) {
+      // 为每个外环找到包含的洞
+      const myHoles = [];
+      for (const holeParts of holes) {
+        for (const hole of holeParts) {
+          if (hole.length > 0) {
+            const hcx = hole[0][0];
+            const ocx = outer[0][0];
+            // 简单地按经度范围判断
+            if (Math.abs(hcx - ocx) < 180) {
+              myHoles.push(hole);
+            }
+          }
+        }
+      }
+      result.push([outer, ...myHoles]);
+    }
+
+    return result.length > 0 ? result : [polygon];
+  }
+
+  // 切割跨日期变更线的环
+  _splitAntimeridianRing(ring) {
+    const segments = [];
+    let currentSegment = [];
+
+    for (let i = 0; i < ring.length; i++) {
+      const [lng, lat] = ring[i];
+
+      if (currentSegment.length === 0) {
+        currentSegment.push([lng, lat]);
+        continue;
+      }
+
+      const prev = currentSegment[currentSegment.length - 1];
+      const prevLng = prev[0];
+      const delta = lng - prevLng;
+
+      // 如果经度跳跃超过 180°，说明跨了日期变更线
+      if (Math.abs(delta) > 180) {
+        // 结束当前段
+        if (currentSegment.length > 1) {
+          segments.push(currentSegment);
+        }
+        // 开始新段
+        currentSegment = [[lng, lat]];
+      } else {
+        currentSegment.push([lng, lat]);
+      }
+    }
+
+    if (currentSegment.length > 1) {
+      segments.push(currentSegment);
+    }
+
+    // 确保每个段是闭合的
+    for (const seg of segments) {
+      if (seg.length > 0) {
+        const first = seg[0];
+        const last = seg[seg.length - 1];
+        if (first[0] !== last[0] || first[1] !== last[1]) {
+          seg.push([first[0], first[1]]);
+        }
+      }
+    }
+
+    return segments;
   }
 
   _resizeFallbackCanvas() {
@@ -189,6 +329,7 @@ export class MapLayer {
     const rect = this.fallback.canvas.getBoundingClientRect();
     this.fallback.canvas.width = rect.width * dpr;
     this.fallback.canvas.height = rect.height * dpr;
+    this.fallback.ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.fallback.ctx.scale(dpr, dpr);
     this._renderFallback();
   }
@@ -196,7 +337,7 @@ export class MapLayer {
   // Canvas 2D 渲染地图
   _renderFallback() {
     if (!this.fallback) return;
-    const { ctx, geoData, centerLng, centerLat, zoom } = this.fallback;
+    const { ctx, countries, admin1, centerLng, centerLat, zoom } = this.fallback;
     const rect = this.fallback.canvas.getBoundingClientRect();
     const w = rect.width;
     const h = rect.height;
@@ -214,18 +355,27 @@ export class MapLayer {
     this.engine.offsetY = offsetY;
     this.engine.scale = pixelScale;
 
-    // 绘制国家填充
-    ctx.fillStyle = '#f0f0f0';
-    for (const feature of geoData.features) {
+    // 1. 绘制国家填充
+    ctx.fillStyle = '#f5f5f0';
+    for (const feature of countries.features) {
       this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, true);
     }
 
-    // 绘制国家边界
-    ctx.strokeStyle = '#b0b0b0';
-    ctx.lineWidth = Math.max(0.5, pixelScale * 0.5);
+    // 2. 绘制省/州行政区划边界（较细、较浅）
+    ctx.strokeStyle = '#d0d0c8';
+    ctx.lineWidth = Math.max(0.3, pixelScale * 0.2);
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    for (const feature of geoData.features) {
+    for (const feature of admin1.features) {
+      this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, false);
+    }
+
+    // 3. 绘制国家边界（较粗、较深）
+    ctx.strokeStyle = '#999999';
+    ctx.lineWidth = Math.max(0.5, pixelScale * 0.4);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (const feature of countries.features) {
       this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, false);
     }
 
@@ -304,13 +454,12 @@ export class MapLayer {
     return { lng, lat };
   }
 
-  // 屏幕坐标 -> 经纬度（供 CanvasEngine 调用）
+  // 屏幕坐标 -> 经纬度
   screenToLngLat(sx, sy) {
     if (this._mode === 'maplibre' && this.map) {
       return this.map.unproject([sx, sy]);
     }
     if (this._mode === 'canvas2d' && this.fallback) {
-      // 反算：屏幕 -> 世界 -> 经纬度
       const wx = (sx - this.engine.offsetX) / this.engine.scale;
       const wy = (sy - this.engine.offsetY) / this.engine.scale;
       return this._worldToLngLat(wx, wy);
@@ -318,7 +467,7 @@ export class MapLayer {
     return null;
   }
 
-  // 经纬度 -> 屏幕坐标（供 CanvasEngine 调用）
+  // 经纬度 -> 屏幕坐标
   lngLatToScreen(lng, lat) {
     if (this._mode === 'maplibre' && this.map) {
       return this.map.project([lng, lat]);
@@ -343,6 +492,38 @@ export class MapLayer {
       this.fallback.zoom = zoom;
       this._renderFallback();
     }
+  }
+
+  // Canvas 2D 模式：通过像素增量平移地图
+  panByPixels(dx, dy) {
+    if (this._mode !== 'canvas2d' || !this.fallback) return;
+    const pixelScale = 256 * Math.pow(2, this.fallback.zoom) / 360;
+    // 像素增量 -> 经纬度增量
+    const dLng = -dx / pixelScale;
+    // 纬度增量需要考虑墨卡托投影的非线性
+    const centerWorld = this._lngLatToWorld(this.fallback.centerLng, this.fallback.centerLat);
+    const newCenterWorldY = centerWorld.y - dy / pixelScale;
+    const newCenter = this._worldToLngLat(centerWorld.x + dLng, newCenterWorldY);
+    this.fallback.centerLng = newCenter.lng;
+    this.fallback.centerLat = newCenter.lat;
+    this._renderFallback();
+  }
+
+  // Canvas 2D 模式：以屏幕坐标为中心缩放
+  zoomAt(screenX, screenY, newZoom) {
+    if (this._mode !== 'canvas2d' || !this.fallback) return;
+    const clampedZoom = Math.max(0, Math.min(this._maxZoom, newZoom));
+    // 缩放前鼠标位置对应的经纬度
+    const before = this.screenToLngLat(screenX, screenY);
+    if (!before) return;
+    this.fallback.zoom = clampedZoom;
+    // 缩放后该经纬度对应的屏幕位置
+    const after = this.lngLatToScreen(before.lng, before.lat);
+    if (!after) return;
+    // 调整中心使鼠标位置保持不变
+    const dx = after.x - screenX;
+    const dy = after.y - screenY;
+    this.panByPixels(dx, dy);
   }
 
   // 获取导出用 canvas
