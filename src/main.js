@@ -308,32 +308,13 @@ function startApp(userName) {
     yjsSync.addStroke(stroke.points, stroke.color, stroke.width);
   };
 
-  // 橡皮擦 -> 命中检测并删除
+  // 橡皮擦 -> 只擦除笔画，不擦除图片和文字（避免绘画时误删）
   engine.onErase = (worldX, worldY) => {
-    // 1. 先检测笔画（上层优先删除）
     const strokes = yjsSync.getAllStrokes();
     for (let i = strokes.length - 1; i >= 0; i--) {
       const s = strokes[i];
       if (pointToStrokeDistance(worldX, worldY, s) < s.width * 1.5 + 8) {
         yjsSync.removeStroke(s.index);
-        return true;
-      }
-    }
-    // 2. 检测文字
-    const texts = yjsSync.getAllTexts();
-    for (let i = texts.length - 1; i >= 0; i--) {
-      const t = texts[i];
-      if (hitTestText(worldX, worldY, t)) {
-        yjsSync.removeTextById(t.id);
-        return true;
-      }
-    }
-    // 3. 未命中笔画/文字，检测图片（下层）
-    const images = yjsSync.getAllImages();
-    for (let i = images.length - 1; i >= 0; i--) {
-      const img = images[i];
-      if (hitTestImage(worldX, worldY, img)) {
-        yjsSync.removeImageById(img.id);
         return true;
       }
     }
@@ -429,6 +410,17 @@ function startApp(userName) {
       const texts = yjsSync.getAllTexts();
       const t = texts.find(t => t.id === selectedTextId);
       if (t) showImagePropsPanel(null, t);
+    }
+  };
+
+  // 删除按钮点击 -> 删除选中元素
+  engine.onDeleteButtonClick = () => {
+    if (selectedType === 'image' && selectedImageId) {
+      yjsSync.removeImageById(selectedImageId);
+      deselectAll();
+    } else if (selectedType === 'text' && selectedTextId) {
+      yjsSync.removeTextById(selectedTextId);
+      deselectAll();
     }
   };
 
@@ -1139,6 +1131,20 @@ function setupKeyboard() {
 
     if (e.key === 'e' || e.key === 'E') {
       setTool('eraser');
+    }
+
+    // Delete/Backspace: 删除选中的图片或文字（不在输入框中时）
+    if ((e.key === 'Delete' || e.key === 'Backspace') && (selectedImageId || selectedTextId)) {
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA' && !document.activeElement?.isContentEditable) {
+        e.preventDefault();
+        if (selectedType === 'image' && selectedImageId) {
+          yjsSync.removeImageById(selectedImageId);
+        } else if (selectedType === 'text' && selectedTextId) {
+          yjsSync.removeTextById(selectedTextId);
+        }
+        deselectAll();
+      }
     }
 
     // Escape: 取消选择或取消放置

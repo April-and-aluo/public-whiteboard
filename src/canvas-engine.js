@@ -67,6 +67,7 @@ export class CanvasEngine {
     this.onCursorMove = null; // (worldX, worldY) => void
     this.onViewportChange = null;
     this.onEditButtonClick = null; // () => void 编辑按钮被点击
+    this.onDeleteButtonClick = null; // () => void 删除按钮被点击
     this.onDragMove = null; // (itemType, deltaX, deltaY) => void 拖拽移动
     this.onDragEnd = null; // () => void 拖拽结束
     this.selectedImage = null; // 当前选中的图片对象（用于高亮显示）
@@ -187,6 +188,11 @@ export class CanvasEngine {
       // 1. 检查是否点击了编辑按钮
       if (this._hitTestEditButton(point.x, point.y)) {
         if (this.onEditButtonClick) this.onEditButtonClick();
+        return;
+      }
+      // 1b. 检查是否点击了删除按钮
+      if (this._hitTestDeleteButton(point.x, point.y)) {
+        if (this.onDeleteButtonClick) this.onDeleteButtonClick();
         return;
       }
       // 2. 检查是否点击了已有选中项（开始拖拽）
@@ -569,6 +575,7 @@ export class CanvasEngine {
     // 绘制编辑按钮（圆形，位于选中边框右上角）
     if ((this.selectedImage || this.selectedText) && !this.isEditMode) {
       this._drawEditButton(ctx);
+      this._drawDeleteButton(ctx);
     }
 
     ctx.restore();
@@ -645,6 +652,69 @@ export class CanvasEngine {
     if (!pos) return false;
     const screen = this.worldToScreen(pos.x, pos.y);
     const r = 18; // 点击半径稍大
+    const dx = screenX - screen.x;
+    const dy = screenY - screen.y;
+    return dx * dx + dy * dy <= r * r;
+  }
+
+  // 绘制删除按钮（编辑按钮左侧）
+  _drawDeleteButton(ctx) {
+    const pos = this._getDeleteButtonWorldPos();
+    if (!pos) return;
+    const r = 14 / this.scale;
+
+    ctx.save();
+    ctx.translate(pos.x, pos.y);
+    // 圆形背景（红色）
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    // 垃圾桶图标（白色线条）
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5 / this.scale;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const s = 5 / this.scale;
+    // 桶身
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.7, -s * 0.3);
+    ctx.lineTo(-s * 0.5, s * 0.7);
+    ctx.lineTo(s * 0.5, s * 0.7);
+    ctx.lineTo(s * 0.7, -s * 0.3);
+    ctx.stroke();
+    // 桶盖
+    ctx.beginPath();
+    ctx.moveTo(-s, -s * 0.3);
+    ctx.lineTo(s, -s * 0.3);
+    ctx.stroke();
+    // 桶把手
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.35, -s * 0.6);
+    ctx.lineTo(-s * 0.35, -s * 0.3);
+    ctx.moveTo(s * 0.35, -s * 0.6);
+    ctx.lineTo(s * 0.35, -s * 0.3);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 获取删除按钮在世界坐标中的位置（编辑按钮左侧）
+  _getDeleteButtonWorldPos() {
+    const editPos = this._getEditButtonWorldPos();
+    if (!editPos) return null;
+    // 删除按钮在编辑按钮左侧，间距 36px（屏幕坐标）
+    const offset = 36 / this.scale;
+    return { x: editPos.x - offset, y: editPos.y };
+  }
+
+  // 检查屏幕坐标是否点击了删除按钮
+  _hitTestDeleteButton(screenX, screenY) {
+    if (!this.selectedImage && !this.selectedText) return false;
+    if (this.isEditMode) return false;
+    const pos = this._getDeleteButtonWorldPos();
+    if (!pos) return false;
+    const screen = this.worldToScreen(pos.x, pos.y);
+    const r = 18;
     const dx = screenX - screen.x;
     const dy = screenY - screen.y;
     return dx * dx + dy * dy <= r * r;
