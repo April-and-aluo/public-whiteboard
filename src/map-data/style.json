@@ -1,0 +1,53 @@
+{
+  "version": 8,
+  "name": "Whiteboard World Map",
+  "sources": {
+    "countries": {
+      "type": "geojson",
+      "data": "/map-data/countries.geojson"
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#ffffff"
+      }
+    },
+    {
+      "id": "country-fill",
+      "type": "fill",
+      "source": "countries",
+      "paint": {
+        "fill-color": "#f0f0f0",
+        "fill-opacity": 1,
+        "fill-antialias": true
+      }
+    },
+    {
+      "id": "country-borders",
+      "type": "line",
+      "source": "countries",
+      "paint": {
+        "line-color": "#b0b0b0",
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          0, 0.4,
+          2, 0.6,
+          4, 0.8,
+          6, 1.2,
+          8, 2.0
+        ],
+        "line-blur": 0,
+        "line-opacity": 0.8
+      },
+      "layout": {
+        "line-join": "round",
+        "line-cap": "round"
+      }
+    }
+  ]
+}

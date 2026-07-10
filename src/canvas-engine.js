@@ -131,9 +131,9 @@ export class CanvasEngine {
     if (this.mapMode && this.mapLayer && this.mapLayer.map) {
       const lngLat = this.mapLayer.screenToLngLat(sx, sy);
       if (lngLat) {
-        // 转换为墨卡托世界坐标（与 _lngLatToWorld 一致）
+        // 转换为墨卡托世界坐标（Y 轴向下，与屏幕坐标一致）
         const latRad = lngLat.lat * Math.PI / 180;
-        const y = 180 / Math.PI * Math.log(Math.tan(Math.PI / 4 + latRad / 2));
+        const y = -180 / Math.PI * Math.log(Math.tan(Math.PI / 4 + latRad / 2));
         return { x: lngLat.lng, y };
       }
     }
@@ -148,8 +148,8 @@ export class CanvasEngine {
   worldToScreen(wx, wy) {
     // 地图模式：使用 MapLibre 的投影
     if (this.mapMode && this.mapLayer && this.mapLayer.map) {
-      // 世界坐标 -> 经纬度
-      const yRad = wy * Math.PI / 180;
+      // 世界坐标 -> 经纬度（Y 轴翻转）
+      const yRad = -wy * Math.PI / 180;
       const lat = 180 / Math.PI * (2 * Math.atan(Math.exp(yRad)) - Math.PI / 2);
       const screen = this.mapLayer.lngLatToScreen(wx, lat);
       if (screen) return { x: screen.x, y: screen.y };

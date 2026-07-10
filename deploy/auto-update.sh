@@ -29,6 +29,8 @@ FRONTEND_FILES=(
   "src/export.js"
   "src/map-layer.js"
   "src/reward-qrcode.png"
+  "src/map-data/style.json"
+  "src/map-data/countries.geojson"
   "announcement.json"
 )
 
@@ -84,7 +86,10 @@ for file in "${FRONTEND_FILES[@]}"; do
   url="https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@${LATEST_HASH}/${file}"
   
   # 如果是前端 src/ 下的文件，放到 public/
-  if [[ "$file" == src/* ]]; then
+  if [[ "$file" == src/map-data/* ]]; then
+    mkdir -p "$PUBLIC_DIR/map-data"
+    target="$PUBLIC_DIR/map-data/$filename"
+  elif [[ "$file" == src/* ]]; then
     target="$PUBLIC_DIR/$filename"
   elif [[ "$file" == announcement.json ]]; then
     target="$PUBLIC_DIR/$filename"
