@@ -24,6 +24,7 @@ let editingTextId = null; // 正在编辑的文字 ID（null 表示新建）
 let minimapTimer = null;
 let savedViewport = null; // 跳转前保存的视口位置
 let dragStartPos = null; // 拖拽起始位置缓存
+let sessionToken = null; // 内存中的 token（不持久化，供 WebSocket 认证用）
 
 // ===== 布局版本管理 =====
 
@@ -113,10 +114,15 @@ function initAuthEntry() {
     });
   }
 
-  // 先尝试自动登录（优先 cookie，其次 localStorage）
-  const savedToken = getCookie('wb_token') || localStorage.getItem('wb_token');
+  // 先尝试自动登录（HttpOnly Cookie 自动随请求发送）
+  // 同时兼容旧版 localStorage 中存储的 token
+  const savedToken = localStorage.getItem('wb_token');
   if (savedToken) {
+    // 兼容旧版：将 localStorage token 传入 body
     autoLogin(savedToken, overlay);
+  } else {
+    // 尝试 Cookie 认证（无需传 token，浏览器自动携带 HttpOnly Cookie）
+    autoLogin(null, overlay);
   }
 
   // 模式切换
@@ -166,12 +172,13 @@ function initAuthEntry() {
         return;
       }
 
-      // 注册或登录成功，保存 token 到 cookie 和 localStorage
+      // 注册或登录成功：token 由服务器通过 HttpOnly Cookie 自动设置
+      // 同时将 token 保存在内存中供 WebSocket 认证使用（不持久化到 localStorage）
       if (data.token) {
-        setCookie('wb_token', data.token, 7);
+        sessionToken = data.token;
+      }
+      if (data.username) {
         setCookie('wb_username', data.username, 7);
-        localStorage.setItem('wb_token', data.token);
-        localStorage.setItem('wb_username', data.username);
       }
 
       overlay.style.opacity = '0';
@@ -201,20 +208,25 @@ function initAuthEntry() {
 
 async function autoLogin(token, overlay) {
   try {
+    // 如果有 token 参数（旧版兼容），放入 body；否则依赖 HttpOnly Cookie 自动认证
+    const body = token ? JSON.stringify({ token }) : '{}';
     const resp = await fetch(API_BASE + '/api/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      body,
     });
     if (resp.ok) {
       const data = await resp.json();
+      // 保存 token 到内存供 WebSocket 认证
+      if (data.token) sessionToken = data.token;
+      // 清理旧版 localStorage 中的 token（已迁移到 HttpOnly Cookie）
+      localStorage.removeItem('wb_token');
       overlay.style.opacity = '0';
       setTimeout(() => {
         overlay.classList.add('hidden');
         startApp(data.username);
       }, 400);
     } else {
-      deleteCookie('wb_token');
       deleteCookie('wb_username');
       localStorage.removeItem('wb_token');
       localStorage.removeItem('wb_username');
@@ -286,8 +298,8 @@ function startApp(userName) {
     () => yjsSync.getAllTexts()
   );
 
-  // 连接 Yjs 同步
-  yjsSync.connect(userName);
+  // 连接 Yjs 同步（传递 token 用于 WebSocket 认证）
+  yjsSync.connect(userName, sessionToken || '');
 
   // ===== 设置回调 =====
 

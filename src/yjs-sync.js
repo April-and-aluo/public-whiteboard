@@ -49,11 +49,13 @@ export class YjsSync {
     this.onConnectionChange = null;
     this.onAwarenessChange = null;
     this.onDataChange = null;
+    this._authToken = null;
   }
 
   // 初始化连接
-  connect(userName) {
+  connect(userName, authToken) {
     this.userName = userName;
+    this._authToken = authToken || null;
     this.userId = this._generateId();
     this.userColor = USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)];
 
@@ -184,7 +186,10 @@ export class YjsSync {
   // WebSocket 模式连接（推荐，生产环境）
   _connectWebSocket() {
     try {
-      this.provider = new WebsocketProvider(WS_URL, this.roomId, this.doc, {
+      // 构建 URL：附加 token query 参数用于认证
+      const wsUrl = WS_URL + (WS_URL.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(this._authToken || '');
+
+      this.provider = new WebsocketProvider(wsUrl, this.roomId, this.doc, {
         connect: true,
       });
 

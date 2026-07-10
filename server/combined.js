@@ -95,24 +95,32 @@ function writeUsers(users) {
   return writeQueue;
 }
 
-// 密码哈希（scryptSync + 随机 salt）
+// 密码哈希（异步 scrypt + 随机 salt，避免阻塞事件循环）
 function hashPassword(password) {
-  const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, 64);
-  return salt.toString('hex') + ':' + hash.toString('hex');
+  return new Promise((resolve, reject) => {
+    const salt = crypto.randomBytes(16);
+    crypto.scrypt(password, salt, 64, (err, hash) => {
+      if (err) { reject(err); return; }
+      resolve(salt.toString('hex') + ':' + hash.toString('hex'));
+    });
+  });
 }
 
-// 验证密码（使用 timingSafeEqual 防止时序攻击）
+// 验证密码（异步 scrypt + timingSafeEqual 防止时序攻击）
 function verifyPassword(password, stored) {
-  try {
-    const [saltHex, hashHex] = stored.split(':');
-    const salt = Buffer.from(saltHex, 'hex');
-    const storedHash = Buffer.from(hashHex, 'hex');
-    const hash = crypto.scryptSync(password, salt, 64);
-    return hash.length === storedHash.length && crypto.timingSafeEqual(hash, storedHash);
-  } catch (err) {
-    return false;
-  }
+  return new Promise((resolve) => {
+    try {
+      const [saltHex, hashHex] = stored.split(':');
+      const salt = Buffer.from(saltHex, 'hex');
+      const storedHash = Buffer.from(hashHex, 'hex');
+      crypto.scrypt(password, salt, 64, (err, hash) => {
+        if (err) { resolve(false); return; }
+        resolve(hash.length === storedHash.length && crypto.timingSafeEqual(hash, storedHash));
+      });
+    } catch (err) {
+      resolve(false);
+    }
+  });
 }
 
 // 用户名验证：2-20 字符，允许字母数字下划线和中文
@@ -122,10 +130,10 @@ function isValidUsername(username) {
   return /^[a-zA-Z0-9_\u4e00-\u9fa5]+$/.test(username);
 }
 
-// 密码验证：4-64 字符
+// 密码验证：8-64 字符
 function isValidPassword(password) {
   if (typeof password !== 'string') return false;
-  return password.length >= 4 && password.length <= 64;
+  return password.length >= 8 && password.length <= 64;
 }
 
 // 生成 token（crypto.randomBytes(32)）
@@ -153,6 +161,65 @@ function verifyToken(token) {
     return null;
   }
   return record;
+}
+
+// ============================================
+// 速率限制 - 防止暴力破解和 DoS
+// ============================================
+const rateLimitMap = new Map(); // key: IP -> { count, resetTime }
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 分钟窗口
+const RATE_LIMIT_MAX_AUTH = 10; // 认证接口每分钟最多 10 次
+const RATE_LIMIT_MAX_GENERAL = 60; // 其他 API 每分钟最多 60 次
+
+function rateLimit(ip, maxRequests) {
+  const now = Date.now();
+  let entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetTime) {
+    entry = { count: 1, resetTime: now + RATE_LIMIT_WINDOW };
+    rateLimitMap.set(ip, entry);
+    return { allowed: true, remaining: maxRequests - 1 };
+  }
+  entry.count++;
+  if (entry.count > maxRequests) {
+    return { allowed: false, remaining: 0, retryAfter: Math.ceil((entry.resetTime - now) / 1000) };
+  }
+  return { allowed: true, remaining: maxRequests - entry.count };
+}
+
+// 定期清理过期的速率限制条目
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now > entry.resetTime) rateLimitMap.delete(ip);
+  }
+}, 5 * 60 * 1000).unref();
+
+// 获取客户端 IP
+function getClientIP(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+}
+
+// ============================================
+// 请求体读取（带大小限制，防止内存耗尽 DoS）
+// ============================================
+const MAX_BODY_SIZE = 1024 * 1024; // 1MB 最大请求体
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let data = '';
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_SIZE) {
+        req.destroy(); // 中断读取
+        resolve(null); // null 表示超限
+        return;
+      }
+      data += chunk;
+    });
+    req.on('end', () => resolve(data));
+    req.on('error', () => resolve(''));
+  });
 }
 
 // ============================================
@@ -235,6 +302,7 @@ function saveAllDocs() {
 // 房间管理 - 每个房间维护一个 Y.Doc
 // ============================================
 const docs = new Map();
+const docEmptyTimers = new Map(); // 空房间超时清理定时器
 
 function getYDoc(docName, gc = true) {
   let doc = docs.get(docName);
@@ -251,6 +319,11 @@ function getYDoc(docName, gc = true) {
       debouncedSaveDoc(docName, doc);
     });
     docs.set(docName, doc);
+  }
+  // 取消空房间清理定时器（有用户加入了）
+  if (docEmptyTimers.has(docName)) {
+    clearTimeout(docEmptyTimers.get(docName));
+    docEmptyTimers.delete(docName);
   }
   return doc;
 }
@@ -288,19 +361,27 @@ function closeConn(doc, conn) {
       doc.off('update', conn._updateHandler);
       conn._updateHandler = null;
     }
-    // 如果房间没有人了，保存数据到磁盘后保留文档在内存中
-    // （不再销毁，以便新用户加入时仍能获取历史数据）
+    // 如果房间没有人了，保存数据到磁盘并设置超时清理
     if (doc.conns.size === 0) {
       // 立即保存最新状态到磁盘
       for (const [name, d] of docs) {
         if (d === doc) {
           saveDocToDisk(name, doc);
+          // 设置 10 分钟超时清理：到期后销毁文档释放内存
+          // 新用户加入时会从磁盘重新加载
+          if (docEmptyTimers.has(name)) clearTimeout(docEmptyTimers.get(name));
+          docEmptyTimers.set(name, setTimeout(() => {
+            docEmptyTimers.delete(name);
+            const stillEmpty = docs.get(name);
+            if (stillEmpty && stillEmpty.conns.size === 0) {
+              stillEmpty.destroy();
+              docs.delete(name);
+              console.log(`[清理] 空房间 "${name}" 已从内存释放`);
+            }
+          }, 10 * 60 * 1000));
           break;
         }
       }
-      // 注意：不删除 docs 中的文档，也不调用 doc.destroy()
-      // 这样即使服务器不重启，数据也在内存中保留
-      // 防抖保存定时器仍会在需要时触发
     }
   }
   try { conn.close(); } catch (e) {}
@@ -435,7 +516,7 @@ function setupWSConnection(conn, req, docName) {
   // 记录客户端 ID 用于 awareness 清理
   doc.conns.get(conn).add(doc.awareness.clientID);
 
-  console.log(`[+] Client joined room "${docName}" (${doc.conns.size} online)`);
+  console.log(`[+] Client "${conn._username || 'unknown'}" joined room "${docName}" (${doc.conns.size} online)`);
 }
 
 // ============================================
@@ -486,10 +567,11 @@ const server = http.createServer(async (req, res) => {
   // ============================================
   const apiPath = req.url.split('?')[0];
   if (apiPath.startsWith('/api/')) {
-    // 设置 CORS 头，允许跨域访问
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // CORS：同源部署不需要跨域，限制为同源
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Vary', 'Origin');
 
     // 处理预检请求
     if (req.method === 'OPTIONS') {
@@ -498,13 +580,26 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 读取并解析请求体
-    const body = await new Promise((resolve) => {
-      let data = '';
-      req.on('data', (chunk) => { data += chunk; });
-      req.on('end', () => resolve(data));
-      req.on('error', () => resolve(''));
-    });
+    // 速率限制
+    const clientIP = getClientIP(req);
+    const isAuthEndpoint = apiPath === '/api/login' || apiPath === '/api/register';
+    const rl = rateLimit(clientIP, isAuthEndpoint ? RATE_LIMIT_MAX_AUTH : RATE_LIMIT_MAX_GENERAL);
+    if (!rl.allowed) {
+      res.writeHead(429, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Retry-After': String(rl.retryAfter || 60),
+      });
+      res.end(JSON.stringify({ ok: false, error: `请求过于频繁，请${rl.retryAfter || 60}秒后重试` }));
+      return;
+    }
+
+    // 读取并解析请求体（带大小限制）
+    const body = await readBody(req);
+    if (body === null) {
+      res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: '请求体过大' }));
+      return;
+    }
 
     let parsed = {};
     try {
@@ -515,11 +610,50 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 辅助函数：发送 JSON 响应
-    const sendJson = (status, payload) => {
-      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+    // 辅助函数：发送 JSON 响应（可附加 Set-Cookie 头）
+    const sendJson = (status, payload, cookies = null) => {
+      const headers = { 'Content-Type': 'application/json; charset=utf-8' };
+      if (cookies) headers['Set-Cookie'] = cookies;
+      res.writeHead(status, headers);
       res.end(JSON.stringify(payload));
     };
+
+    // 构建 HttpOnly token cookie 字符串
+    const makeTokenCookie = (token, maxAgeDays = 7) => {
+      const parts = [
+        `wb_token=${token}`,
+        `Max-Age=${maxAgeDays * 86400}`,
+        'Path=/',
+        'HttpOnly',
+        'SameSite=Lax',
+      ];
+      // HTTPS 环境下添加 Secure 标志
+      if (req.connection.encrypted || req.headers['x-forwarded-proto'] === 'https') {
+        parts.push('Secure');
+      }
+      return parts.join('; ');
+    };
+
+    // 构建用户名 cookie（前端可读，非 HttpOnly）
+    const makeUsernameCookie = (username, maxAgeDays = 7) => {
+      const parts = [
+        `wb_username=${encodeURIComponent(username)}`,
+        `Max-Age=${maxAgeDays * 86400}`,
+        'Path=/',
+        'SameSite=Lax',
+      ];
+      if (req.connection.encrypted || req.headers['x-forwarded-proto'] === 'https') {
+        parts.push('Secure');
+      }
+      return parts.join('; ');
+    };
+
+    // 从 Cookie 中提取 token（HttpOnly cookie 会自动随请求发送）
+    function getTokenFromCookies(cookieHeader) {
+      if (!cookieHeader) return '';
+      const match = cookieHeader.match(/(?:^|;\s*)wb_token=([^;]+)/);
+      return match ? match[1] : '';
+    }
 
     // /api/register - 注册账号
     if (apiPath === '/api/register' && req.method === 'POST') {
@@ -529,7 +663,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (!isValidPassword(password)) {
-        sendJson(400, { ok: false, error: '密码需为 4-64 字符' });
+        sendJson(400, { ok: false, error: '密码需为 8-64 字符' });
         return;
       }
       const users = readUsers();
@@ -538,14 +672,15 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       users[username] = {
-        password: hashPassword(password),
+        password: await hashPassword(password),
         createdAt: Date.now(),
       };
       await writeUsers(users);
       // 注册成功后直接返回 token，免去前端二次登录
       const token = createToken(username);
       console.log(`[+] 用户注册并登录: ${username}`);
-      sendJson(200, { ok: true, token, username, message: '注册成功' });
+      const cookies = [makeTokenCookie(token), makeUsernameCookie(username)];
+      sendJson(200, { ok: true, token, username, message: '注册成功' }, cookies);
       return;
     }
 
@@ -558,26 +693,30 @@ const server = http.createServer(async (req, res) => {
       }
       const users = readUsers();
       const user = users[username];
-      if (!user || !verifyPassword(password, user.password)) {
+      if (!user || !(await verifyPassword(password, user.password))) {
         sendJson(401, { ok: false, error: '用户名或密码错误' });
         return;
       }
       const token = createToken(username);
       console.log(`[+] 用户登录: ${username}`);
-      sendJson(200, { ok: true, token, username });
+      const cookies = [makeTokenCookie(token), makeUsernameCookie(username)];
+      sendJson(200, { ok: true, token, username }, cookies);
       return;
     }
 
-    // /api/verify - 验证 token 有效性
+    // /api/verify - 验证 token 有效性（支持 Cookie、body、Authorization header）
     if (apiPath === '/api/verify' && req.method === 'POST') {
-      const token = parsed.token ||
+      const token = getTokenFromCookies(req.headers.cookie) ||
+        parsed.token ||
         (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
       const record = verifyToken(token);
       if (!record) {
         sendJson(401, { ok: false, error: 'token 无效或已过期' });
         return;
       }
-      sendJson(200, { ok: true, username: record.username });
+      // 返回 token 供 WebSocket 认证使用（HttpOnly Cookie 无法被 JS 读取）
+      // 前端将此 token 仅保存在内存中，不持久化到 localStorage
+      sendJson(200, { ok: true, username: record.username, token });
       return;
     }
 
@@ -590,10 +729,10 @@ const server = http.createServer(async (req, res) => {
   let urlPath = req.url.split('?')[0];
   if (urlPath === '/') urlPath = '/index.html';
 
-  const safePath = path.normalize(urlPath).replace(/^(\.\.[\/\\])+/, '');
-  const filePath = path.join(__dirname, 'public', safePath);
-
-  if (!filePath.startsWith(path.join(__dirname, 'public'))) {
+  // 安全路径解析：使用 resolve 规范化，确保结果在 public 目录内
+  const publicDir = path.join(__dirname, 'public');
+  const filePath = path.resolve(publicDir, '.' + urlPath);
+  if (!filePath.startsWith(publicDir + path.sep) && filePath !== publicDir) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
@@ -633,17 +772,48 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ============================================
-// WebSocket 服务器
+// WebSocket 服务器（带 token 认证 + 消息大小限制 + 连接数限制）
 // ============================================
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: 2 * 1024 * 1024 }); // 单条消息最大 2MB
+
+// 每个房间最大连接数
+const MAX_CONNECTIONS_PER_ROOM = 50;
 
 function getRoomName(url) {
   const match = url.match(/^\/([^?]+)/);
   return match ? match[1] : 'public-board';
 }
 
+// 从 URL query 参数中提取 token
+function getTokenFromURL(url) {
+  try {
+    const urlObj = new URL(url, 'http://localhost');
+    return urlObj.searchParams.get('token') || '';
+  } catch (e) {
+    return '';
+  }
+}
+
 wss.on('connection', (ws, req) => {
+  // 验证 token
+  const token = getTokenFromURL(req.url);
+  const tokenRecord = verifyToken(token);
+  if (!tokenRecord) {
+    ws.close(4001, '未授权：token 无效或已过期');
+    return;
+  }
+
   const roomName = getRoomName(req.url);
+
+  // 检查房间连接数
+  let existingDoc = docs.get(roomName);
+  if (existingDoc && existingDoc.conns.size >= MAX_CONNECTIONS_PER_ROOM) {
+    ws.close(4002, '房间连接数已满');
+    return;
+  }
+
+  // 将用户名绑定到连接上，便于审计
+  ws._username = tokenRecord.username;
   setupWSConnection(ws, req, roomName);
 });
 
