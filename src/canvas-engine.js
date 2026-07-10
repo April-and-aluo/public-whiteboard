@@ -390,7 +390,7 @@ export class CanvasEngine {
         } else {
           zoomDelta = e.deltaY > 0 ? -0.5 : 0.5;
         }
-        const newZoom = Math.max(0, Math.min(this.mapLayer._maxZoom, currentZoom + zoomDelta));
+        const newZoom = Math.max(this.mapLayer._minZoom, Math.min(this.mapLayer._maxZoom, currentZoom + zoomDelta));
         const lngLat = this.mapLayer.screenToLngLat(point.x, point.y);
         this.mapLayer.map.jumpTo({
           zoom: newZoom,
@@ -496,11 +496,11 @@ export class CanvasEngine {
       const zoomDelta = Math.log2(dist / this.pinchStartDist);
       if (this.mapLayer.map) {
         // MapLibre 模式
-        const newZoom = Math.max(0, Math.min(this.mapLayer._maxZoom, this.pinchStartZoom + zoomDelta));
+        const newZoom = Math.max(this.mapLayer._minZoom, Math.min(this.mapLayer._maxZoom, this.pinchStartZoom + zoomDelta));
         this.mapLayer.map.jumpTo({ zoom: newZoom });
       } else {
         // Canvas 2D 模式
-        const newZoom = Math.max(0, Math.min(this.mapLayer._maxZoom, this.pinchStartZoom + zoomDelta));
+        const newZoom = Math.max(this.mapLayer._minZoom, Math.min(this.mapLayer._maxZoom, this.pinchStartZoom + zoomDelta));
         this.mapLayer.zoomAt(currentCenter.x, currentCenter.y, newZoom);
       }
       return;

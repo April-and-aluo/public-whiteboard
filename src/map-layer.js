@@ -16,7 +16,9 @@ export class MapLayer {
     this.onViewportChange = null;
     this._initialized = false;
     this._mode = 'none';      // 'maplibre' | 'canvas2d' | 'none'
-    this._maxZoom = 13;       // 最大缩放级别
+    this._maxZoom = 10;       // 最大缩放级别（限制放大）
+    this._minZoom = 1.5;      // 最小缩放级别（限制看到全球）
+    this._admin1MinZoom = 3;  // 行政区划在 zoom >= 3 时才显示
   }
 
   async init() {
@@ -120,8 +122,8 @@ export class MapLayer {
       container: mapDiv,
       style: style,
       center: [0, 20],
-      zoom: 1,
-      minZoom: 0,
+      zoom: 2,               // 初始 zoom 从 2 开始（不显示全球）
+      minZoom: this._minZoom,
       maxZoom: this._maxZoom,
       attributionControl: false,
       dragPan: false,
@@ -149,7 +151,7 @@ export class MapLayer {
         });
       }
 
-      // 添加行政区划数据源
+      // 添加行政区划数据源（渐进加载：zoom >= 3 才显示）
       if (processedAdmin1) {
         this.map.addSource('admin1', {
           type: 'geojson',
@@ -159,13 +161,17 @@ export class MapLayer {
           id: 'admin1-borders',
           type: 'line',
           source: 'admin1',
+          minzoom: this._admin1MinZoom,  // zoom < 3 时不渲染
           paint: {
             'line-color': '#d0d0c8',
             'line-width': [
               'interpolate', ['linear'], ['zoom'],
-              0, 0.3, 2, 0.4, 4, 0.6, 6, 0.8, 8, 1.0, 13, 2.0
+              3, 0.4, 5, 0.6, 7, 0.8, 10, 1.5
             ],
-            'line-opacity': 0.6,
+            'line-opacity': [
+              'interpolate', ['linear'], ['zoom'],
+              3, 0.3, 4, 0.6, 6, 0.7
+            ],
           },
           layout: { 'line-join': 'round', 'line-cap': 'round' },
         });
@@ -181,7 +187,7 @@ export class MapLayer {
             'line-color': '#999999',
             'line-width': [
               'interpolate', ['linear'], ['zoom'],
-              0, 0.5, 2, 0.7, 4, 1.0, 6, 1.5, 8, 2.5, 13, 4.0
+              0, 0.5, 2, 0.7, 4, 1.0, 6, 1.5, 10, 3.0
             ],
             'line-opacity': 0.8,
           },
@@ -238,7 +244,7 @@ export class MapLayer {
       admin1: processedAdmin1,
       centerLng: 0,
       centerLat: 20,
-      zoom: 1,
+      zoom: 2,               // 初始 zoom 从 2 开始
     };
 
     // 设置 canvas 尺寸
@@ -423,19 +429,39 @@ export class MapLayer {
     this.engine.offsetY = offsetY;
     this.engine.scale = pixelScale;
 
+    // 计算视口对应的经纬度范围（只渲染视口内的要素）
+    const lngMin = this._worldToLngLat((0 - offsetX) / pixelScale, 0).lng;
+    const lngMax = this._worldToLngLat((w - offsetX) / pixelScale, 0).lng;
+    const latMax = this._worldToLngLat(0, (0 - offsetY) / pixelScale).lat;
+    const latMin = this._worldToLngLat(0, (h - offsetY) / pixelScale).lat;
+    // 加一点 padding
+    const padLng = (lngMax - lngMin) * 0.1;
+    const padLat = (latMax - latMin) * 0.1;
+    const viewport = {
+      lngMin: lngMin - padLng, lngMax: lngMax + padLng,
+      latMin: latMin - padLat, latMax: latMax + padLat,
+    };
+
     // 1. 绘制国家填充
     ctx.fillStyle = '#f5f5f0';
     for (const feature of countries.features) {
-      this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, true);
+      if (this._featureInViewport(feature, viewport)) {
+        this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, true);
+      }
     }
 
-    // 2. 绘制省/州行政区划边界（较细、较浅）
-    ctx.strokeStyle = '#d0d0c8';
-    ctx.lineWidth = Math.max(0.3, pixelScale * 0.2);
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    for (const feature of admin1.features) {
-      this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, false);
+    // 2. 绘制行政区划边界（zoom >= 3 时才显示，渐进透明度）
+    if (admin1 && zoom >= this._admin1MinZoom) {
+      const adminOpacity = Math.min(0.7, (zoom - this._admin1MinZoom) * 0.3 + 0.3);
+      ctx.strokeStyle = `rgba(208, 208, 200, ${adminOpacity})`;
+      ctx.lineWidth = Math.max(0.3, pixelScale * 0.15);
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      for (const feature of admin1.features) {
+        if (this._featureInViewport(feature, viewport)) {
+          this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, false);
+        }
+      }
     }
 
     // 3. 绘制国家边界（较粗、较深）
@@ -444,11 +470,42 @@ export class MapLayer {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     for (const feature of countries.features) {
-      this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, false);
+      if (this._featureInViewport(feature, viewport)) {
+        this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, false);
+      }
     }
 
     this.engine.render();
     if (this.engine.onViewportChange) this.engine.onViewportChange();
+  }
+
+  // 检查要素是否在视口范围内（快速 bounding box 测试）
+  _featureInViewport(feature, viewport) {
+    const bbox = feature.bbox || this._getFeatureBBox(feature);
+    if (!bbox) return true; // 无法确定边界时默认渲染
+    return !(bbox[0] > viewport.lngMax || bbox[2] < viewport.lngMin ||
+             bbox[1] > viewport.latMax || bbox[3] < viewport.latMin);
+  }
+
+  // 获取要素的 bounding box（缓存）
+  _getFeatureBBox(feature) {
+    if (feature._bbox) return feature._bbox;
+    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    const coords = feature.geometry.type === 'Polygon'
+      ? [feature.geometry.coordinates]
+      : feature.geometry.coordinates;
+    for (const polygon of coords) {
+      for (const ring of polygon) {
+        for (const [lng, lat] of ring) {
+          if (lng < minLng) minLng = lng;
+          if (lng > maxLng) maxLng = lng;
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+        }
+      }
+    }
+    feature._bbox = [minLng, minLat, maxLng, maxLat];
+    return feature._bbox;
   }
 
   _drawFeature(ctx, feature, offsetX, offsetY, scale, fill) {
@@ -581,7 +638,7 @@ export class MapLayer {
   // Canvas 2D 模式：以屏幕坐标为中心缩放
   zoomAt(screenX, screenY, newZoom) {
     if (this._mode !== 'canvas2d' || !this.fallback) return;
-    const clampedZoom = Math.max(0, Math.min(this._maxZoom, newZoom));
+    const clampedZoom = Math.max(this._minZoom, Math.min(this._maxZoom, newZoom));
     // 缩放前鼠标位置对应的经纬度
     const before = this.screenToLngLat(screenX, screenY);
     if (!before) return;
