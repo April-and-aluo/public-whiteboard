@@ -747,7 +747,7 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(404, { 'Content-Type': 'text/plain' });
             res.end('Not Found');
           } else {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache, must-revalidate' });
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
             res.end(indexData);
           }
         });
@@ -760,11 +760,11 @@ const server = http.createServer(async (req, res) => {
 
     const ext = path.extname(filePath);
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    // 静态文件缓存策略：HTML 始终不缓存（确保加载最新 JS 引用）；
-    // JS/CSS 等资源也设为 no-cache，确保更新后浏览器立即获取新版本
+    // 静态文件缓存策略：所有文件都设为 no-store，
+    // 确保浏览器每次都从服务器获取最新版本，避免更新后使用旧缓存
     const cacheHeaders = {
       'Content-Type': contentType,
-      'Cache-Control': 'no-cache, must-revalidate',
+      'Cache-Control': 'no-store',
     };
     res.writeHead(200, cacheHeaders);
     res.end(data);

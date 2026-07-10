@@ -2,10 +2,10 @@
 // main.js - 应用入口，协调各模块初始化
 // ============================================
 
-import { CanvasEngine } from './canvas-engine.js';
-import { CursorLayer } from './cursor-layer.js';
-import { ExportManager } from './export.js';
-import { yjsSync } from './yjs-sync.js';
+import { CanvasEngine } from './canvas-engine.js?v=20260710a';
+import { CursorLayer } from './cursor-layer.js?v=20260710a';
+import { ExportManager } from './export.js?v=20260710a';
+import { yjsSync } from './yjs-sync.js?v=20260710a';
 
 // ===== 全局状态 =====
 let engine = null;
