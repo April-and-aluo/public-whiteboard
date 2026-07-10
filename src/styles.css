@@ -1205,6 +1205,141 @@ html, body {
   transform: translate(-1px, -1px);
 }
 
+/* ============================================
+   赞赏按钮 + 弹窗
+   ============================================ */
+.reward-btn {
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--paper-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--accent-red);
+  box-shadow: 2px 2px 0 var(--shadow);
+  transition: all 0.12s;
+  flex-shrink: 0;
+}
+
+.reward-btn:hover {
+  background: var(--hover-bg);
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--shadow);
+}
+
+.reward-btn:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--shadow);
+}
+
+.reward-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(66, 32, 6, 0.5);
+  z-index: 2000;
+  animation: fadeIn 0.3s ease;
+}
+
+.reward-card {
+  position: relative;
+  background: var(--paper-light);
+  border: 3px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 32px 24px;
+  text-align: center;
+  box-shadow: 6px 6px 0 var(--border);
+  max-width: 360px;
+  width: 90%;
+  animation: cardPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.reward-close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  font-size: 24px;
+  color: var(--ink-faded);
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.reward-close:hover {
+  color: var(--ink);
+}
+
+.reward-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.reward-title {
+  font-family: 'Caveat', cursive;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.reward-qrcode-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.reward-qrcode {
+  width: 200px;
+  height: 200px;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 2.5px solid var(--border);
+  box-shadow: 3px 3px 0 var(--shadow);
+}
+
+.reward-text {
+  font-family: 'Patrick Hand', cursive;
+  font-size: 16px;
+  color: var(--ink-light);
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.reward-confirm-btn {
+  padding: 10px 32px;
+  font-family: 'Caveat', cursive;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--active-bg);
+  border: 2.5px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.reward-confirm-btn:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--border);
+}
+
+.reward-confirm-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--border);
+}
+
 /* 桌面端隐藏更多按钮 */
 .tool-more-btn { display: none; }
 
@@ -1214,6 +1349,11 @@ html, body {
 @media (max-width: 767px) {
   body.layout-mobile-v2 .layout-toggle-btn {
     display: flex;
+  }
+
+  body.layout-mobile-v2 .reward-btn {
+    width: 28px;
+    height: 28px;
   }
 
   body.layout-mobile-v2 .topbar {

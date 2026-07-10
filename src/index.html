@@ -66,6 +66,24 @@
     </div>
   </div>
 
+  <!-- 赞赏弹窗 -->
+  <div id="reward-overlay" class="reward-overlay hidden">
+    <div class="reward-card">
+      <button id="reward-close" class="reward-close" title="关闭">&times;</button>
+      <div class="reward-header">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="#ef4444" stroke="#422006" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+        </svg>
+        <span class="reward-title">赞赏支持</span>
+      </div>
+      <div class="reward-qrcode-wrap">
+        <img src="reward-qrcode.png" alt="赞赏二维码" class="reward-qrcode">
+      </div>
+      <p class="reward-text">这个项目目前正在实验阶段，如果觉得我们做的好，想要促进更多好玩的新内容的开发的话，赞助一下叭~</p>
+      <button id="reward-confirm" class="reward-confirm-btn">谢谢支持</button>
+    </div>
+  </div>
+
   <!-- 主应用 -->
   <div id="app" class="app hidden">
     <!-- 顶部状态栏 -->
@@ -83,6 +101,12 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2"/>
             <line x1="3" y1="9" x2="21" y2="9"/>
+          </svg>
+        </button>
+        <!-- 赞赏按钮 -->
+        <button id="reward-btn" class="reward-btn" title="赞赏支持">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
           </svg>
         </button>
       </div>

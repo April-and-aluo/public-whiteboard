@@ -578,6 +578,7 @@ function startApp(userName) {
   setupResponsive();
   setupUserListToggle();
   setupImagePropsPanel();
+  setupRewardButton();
 
   // 页面关闭时断开连接，通知其他用户
   window.addEventListener('beforeunload', () => {
@@ -1089,6 +1090,29 @@ function setupImagePropsPanel() {
     if (editingTextId) {
       yjsSync.updateTextProps(editingTextId, { content: e.target.value });
     }
+  });
+}
+
+// ===== 赞赏按钮 =====
+
+function setupRewardButton() {
+  const btn = document.getElementById('reward-btn');
+  const overlay = document.getElementById('reward-overlay');
+  if (!btn || !overlay) return;
+
+  const closeBtn = document.getElementById('reward-close');
+  const confirmBtn = document.getElementById('reward-confirm');
+
+  const open = () => overlay.classList.remove('hidden');
+  const close = () => overlay.classList.add('hidden');
+
+  btn.addEventListener('click', open);
+  if (closeBtn) closeBtn.addEventListener('click', close);
+  if (confirmBtn) confirmBtn.addEventListener('click', close);
+
+  // 点击遮罩区域关闭
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
   });
 }
 
