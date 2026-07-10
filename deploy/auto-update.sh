@@ -36,7 +36,12 @@ log() {
 }
 
 # 获取 GitHub 最新 commit hash
-LATEST_HASH=$(curl -s "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}" | grep '"sha"' | head -1 | cut -d'"' -f4)
+# 使用认证 token 避免 API 限流（token 通过环境变量 GH_TOKEN 传入）
+AUTH_HEADER=""
+if [ -n "$GH_TOKEN" ]; then
+  AUTH_HEADER="-H \"Authorization: token ${GH_TOKEN}\""
+fi
+LATEST_HASH=$(curl -s ${AUTH_HEADER} "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}" | grep '"sha"' | head -1 | cut -d'"' -f4)
 
 if [ -z "$LATEST_HASH" ]; then
   log "ERROR: 无法获取 GitHub commit hash"
