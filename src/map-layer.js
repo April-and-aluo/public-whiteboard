@@ -93,19 +93,28 @@ export class MapLayer {
     mainCanvas.style.zIndex = '1';
     mainCanvas.style.background = 'transparent';
 
-    // 加载样式配置
-    let style;
-    try {
-      const styleResp = await fetch('/map-data/style.json');
-      if (styleResp.ok) {
-        style = await styleResp.json();
-      } else {
-        throw new Error('Style not found');
-      }
-    } catch (styleErr) {
-      console.warn('[MapLayer] 样式文件加载失败，使用内置样式:', styleErr.message);
-      style = this._getFallbackStyle();
-    }
+    // 并行加载 GeoJSON 数据
+    const [countryData, admin1Data] = await Promise.all([
+      this._loadGeoJSON('/map-data/countries.geojson').catch(() => null),
+      this._loadGeoJSON('/map-data/admin1.geojson').catch(() => null),
+    ]);
+
+    // 预处理：切割跨日期变更线的多边形，防止横向直线伪影
+    const processedCountries = countryData ? this._preprocessGeoJSON(countryData) : null;
+    const processedAdmin1 = admin1Data ? this._preprocessGeoJSON(admin1Data) : null;
+
+    // 使用内置样式（不依赖 style.json），程序化添加数据源和图层
+    const style = {
+      version: 8,
+      sources: {},
+      layers: [
+        {
+          id: 'background',
+          type: 'background',
+          paint: { 'background-color': '#ffffff' }
+        }
+      ]
+    };
 
     this.map = new maplibregl.Map({
       container: mapDiv,
@@ -123,7 +132,66 @@ export class MapLayer {
     });
 
     this.map.on('load', () => {
-      console.log('[MapLayer] MapLibre 地图加载完成');
+      // 添加国家数据源
+      if (processedCountries) {
+        this.map.addSource('countries', {
+          type: 'geojson',
+          data: processedCountries,
+        });
+        this.map.addLayer({
+          id: 'country-fill',
+          type: 'fill',
+          source: 'countries',
+          paint: {
+            'fill-color': '#f5f5f0',
+            'fill-opacity': 1,
+          },
+        });
+      }
+
+      // 添加行政区划数据源
+      if (processedAdmin1) {
+        this.map.addSource('admin1', {
+          type: 'geojson',
+          data: processedAdmin1,
+        });
+        this.map.addLayer({
+          id: 'admin1-borders',
+          type: 'line',
+          source: 'admin1',
+          paint: {
+            'line-color': '#d0d0c8',
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              0, 0.3, 2, 0.4, 4, 0.6, 6, 0.8, 8, 1.0, 13, 2.0
+            ],
+            'line-opacity': 0.6,
+          },
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+        });
+      }
+
+      // 添加国家边界图层（在最上层）
+      if (processedCountries) {
+        this.map.addLayer({
+          id: 'country-borders',
+          type: 'line',
+          source: 'countries',
+          paint: {
+            'line-color': '#999999',
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              0, 0.5, 2, 0.7, 4, 1.0, 6, 1.5, 8, 2.5, 13, 4.0
+            ],
+            'line-opacity': 0.8,
+          },
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+        });
+      }
+
+      console.log('[MapLayer] MapLibre 地图加载完成 (国家:' +
+        (processedCountries ? processedCountries.features.length : 0) + ', 行政区:' +
+        (processedAdmin1 ? processedAdmin1.features.length : 0) + ')');
       this._initialized = true;
       this._mode = 'maplibre';
       this._syncToEngine();
@@ -427,7 +495,8 @@ export class MapLayer {
     const centerLat = transform.lat;
 
     const worldCenter = this._lngLatToWorld(centerLng, centerLat);
-    const pixelScale = 256 * Math.pow(2, zoom) / 360;
+    // MapLibre GL JS 使用 512x512 瓦片，zoom 0 时世界宽 512px
+    const pixelScale = 512 * Math.pow(2, zoom) / 360;
 
     const rect = this.map.getContainer().getBoundingClientRect();
     this.engine.offsetX = rect.width / 2 - worldCenter.x * pixelScale;
