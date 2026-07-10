@@ -130,10 +130,13 @@ function isValidUsername(username) {
   return /^[a-zA-Z0-9_\u4e00-\u9fa5]+$/.test(username);
 }
 
-// 密码验证：8-64 字符
+// 密码验证：8-64 字符，至少包含字母和数字
 function isValidPassword(password) {
   if (typeof password !== 'string') return false;
-  return password.length >= 8 && password.length <= 64;
+  if (password.length < 8 || password.length > 64) return false;
+  // 至少包含字母和数字，防止纯数字或纯字母弱密码
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) return false;
+  return true;
 }
 
 // 生成 token（crypto.randomBytes(32)）
@@ -402,8 +405,10 @@ function broadcastUpdate(doc, conn, update) {
 }
 
 // ============================================
-// 消息处理
+// 消息处理（含文档大小限制）
 // ============================================
+const MAX_DOC_SIZE = 50 * 1024 * 1024; // 文档最大 50MB
+
 function messageListener(conn, doc, message) {
   try {
     const encoder = encoding.createEncoder();
@@ -412,6 +417,20 @@ function messageListener(conn, doc, message) {
 
     switch (messageType) {
       case messageSync:
+        // 在应用更新前检查文档大小
+        if (doc.store && doc.store.clients) {
+          let currentSize = 0;
+          for (const updates of doc.store.clients.values()) {
+            for (const u of updates) {
+              if (u.struct === 'gc') continue;
+              currentSize += (u.content && u.content.length) ? u.content.length * 8 : 0;
+            }
+          }
+          if (currentSize > MAX_DOC_SIZE) {
+            console.warn(`[!] 文档大小超过限制 (${currentSize} bytes)，拒绝写入`);
+            return;
+          }
+        }
         encoding.writeVarUint(encoder, messageSync);
         syncProtocol.readSyncMessage(decoder, encoder, doc, conn);
         // 如果有回复内容，发送回去
@@ -547,17 +566,12 @@ const server = http.createServer(async (req, res) => {
     let totalConns = 0;
     for (const doc of docs.values()) totalConns += doc.conns.size;
     res.writeHead(200, { 'Content-Type': 'application/json' });
+    // 仅暴露基本健康信息，不泄露房间名称和详情
     res.end(JSON.stringify({
       status: 'ok',
       rooms: docs.size,
       connections: totalConns,
-      roomDetails: Array.from(docs.entries()).map(([name, doc]) => ({
-        name,
-        connections: doc.conns.size,
-        awarenessStates: doc.awareness.getStates().size,
-      })),
       uptime: process.uptime(),
-      timestamp: Date.now(),
     }));
     return;
   }
@@ -567,11 +581,10 @@ const server = http.createServer(async (req, res) => {
   // ============================================
   const apiPath = req.url.split('?')[0];
   if (apiPath.startsWith('/api/')) {
-    // CORS：同源部署不需要跨域，限制为同源
-    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '');
+    // CORS：仅允许同源请求，防止跨站 CSRF
+    // 不反射 Origin，浏览器同源策略自动处理
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Vary', 'Origin');
 
     // 处理预检请求
     if (req.method === 'OPTIONS') {
@@ -663,7 +676,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (!isValidPassword(password)) {
-        sendJson(400, { ok: false, error: '密码需为 8-64 字符' });
+        sendJson(400, { ok: false, error: '密码需为 8-64 字符，且至少包含字母和数字' });
         return;
       }
       const users = readUsers();
@@ -780,7 +793,6 @@ const wss = new WebSocketServer({ server, maxPayload: 2 * 1024 * 1024 }); // 单
 // 心跳检测：定期 ping 所有连接，清理死连接
 // ============================================
 const HEARTBEAT_INTERVAL = 30000; // 30 秒检查一次
-const HEARTBEAT_TIMEOUT = 60000;  // 60 秒无响应视为断开
 
 setInterval(() => {
   wss.clients.forEach((ws) => {
@@ -793,13 +805,20 @@ setInterval(() => {
   });
 }, HEARTBEAT_INTERVAL);
 
-wss.on('connection', (ws) => {
-  ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
-});
+// ============================================
+// WebSocket 连接限制
+// ============================================
+const MAX_CONNECTIONS_PER_ROOM = 50;  // 每个房间最大连接数
+const MAX_ROOMS = 20;                 // 最大房间数
+const MAX_WS_CONN_PER_IP = 10;        // 每个 IP 最大 WS 连接数
+const wsConnCountByIP = new Map();     // IP -> 当前连接数
 
-// 每个房间最大连接数
-const MAX_CONNECTIONS_PER_ROOM = 50;
+// 定期清理已断开的 IP 计数（防止 Map 无限增长）
+setInterval(() => {
+  for (const [ip, count] of wsConnCountByIP) {
+    if (count <= 0) wsConnCountByIP.delete(ip);
+  }
+}, 10 * 60 * 1000).unref();
 
 function getRoomName(url) {
   const match = url.match(/^\/([^?]+)/);
@@ -816,21 +835,49 @@ function getTokenFromURL(url) {
   }
 }
 
+// ============================================
+// 统一的 WebSocket 连接处理器（心跳 + 认证 + 限流）
+// ============================================
 wss.on('connection', (ws, req) => {
-  // 验证 token（如有）；无 token 时允许作为访客连接
+  // 1. 心跳初始化
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
+  // 2. IP 连接数限制（防止单 IP 大量连接）
+  const clientIP = getClientIP(req);
+  const ipCount = wsConnCountByIP.get(clientIP) || 0;
+  if (ipCount >= MAX_WS_CONN_PER_IP) {
+    ws.close(4003, '连接数过多');
+    return;
+  }
+  wsConnCountByIP.set(clientIP, ipCount + 1);
+
+  // 连接关闭时减少计数
+  ws.on('close', () => {
+    const c = wsConnCountByIP.get(clientIP) || 0;
+    wsConnCountByIP.set(clientIP, Math.max(0, c - 1));
+  });
+
+  // 3. 验证 token（如有）；无 token 时允许作为访客连接
   const token = getTokenFromURL(req.url);
   const tokenRecord = verifyToken(token);
 
   const roomName = getRoomName(req.url);
 
-  // 检查房间连接数
+  // 4. 房间数量限制（防止创建无限房间耗尽内存）
+  if (!docs.has(roomName) && docs.size >= MAX_ROOMS) {
+    ws.close(4004, '房间数量已达上限');
+    return;
+  }
+
+  // 5. 房间连接数限制
   let existingDoc = docs.get(roomName);
   if (existingDoc && existingDoc.conns.size >= MAX_CONNECTIONS_PER_ROOM) {
     ws.close(4002, '房间连接数已满');
     return;
   }
 
-  // 将用户名绑定到连接上，便于审计（访客标记为 guest）
+  // 6. 将用户名绑定到连接上，便于审计（访客标记为 guest）
   ws._username = tokenRecord ? tokenRecord.username : 'guest';
   setupWSConnection(ws, req, roomName);
 });

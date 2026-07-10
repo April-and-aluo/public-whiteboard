@@ -322,6 +322,10 @@ export class CanvasEngine {
   }
 
   _onPointerLeave(e) {
+    // 如果正在绘画，结束当前笔画（防止指针离开画布时笔画未完成）
+    if (this.isDrawing && this.currentStroke) {
+      this._endDrawing();
+    }
     // 光标离开画布时清除
     if (this.onCursorMove) {
       this.onCursorMove(null, null);
@@ -804,6 +808,15 @@ export class CanvasEngine {
   setRenderSources(imagesGetter, strokesGetter, textsGetter) {
     this.renderImages = (ctx) => {
       const images = imagesGetter();
+      // 清理已删除图片的缓存，防止内存泄漏
+      if (this.imageCache.size > images.length) {
+        const currentIds = new Set(images.map(img => img.id));
+        for (const cachedId of this.imageCache.keys()) {
+          if (!currentIds.has(cachedId)) {
+            this.imageCache.delete(cachedId);
+          }
+        }
+      }
       for (const img of images) {
         this._drawImage(ctx, img);
       }
@@ -1051,39 +1064,6 @@ export class CanvasEngine {
       maxX: maxX + padding,
       maxY: maxY + padding,
     };
-  }
-
-  // 获取用于导出的离屏 canvas
-  renderToOffscreen(strokes, images, width, height) {
-    const offscreen = document.createElement('canvas');
-    offscreen.width = width * this.dpr;
-    offscreen.height = height * this.dpr;
-    const ctx = offscreen.getContext('2d');
-    ctx.scale(this.dpr, this.dpr);
-
-    // 纸张背景
-    ctx.fillStyle = '#fefce8';
-    ctx.fillRect(0, 0, width, height);
-
-    // 绘制图片
-    for (const img of images) {
-      let imageObj = this.imageCache.get(img.id);
-      if (!imageObj) {
-        imageObj = new Image();
-        imageObj.src = img.dataUrl;
-        this.imageCache.set(img.id, imageObj);
-      }
-      if (imageObj.complete && imageObj.naturalWidth > 0) {
-        this._drawImage(ctx, img);
-      }
-    }
-
-    // 绘制笔画
-    for (const s of strokes) {
-      this._drawStroke(ctx, s);
-    }
-
-    return offscreen;
   }
 
   // ===== 迷你地图 =====

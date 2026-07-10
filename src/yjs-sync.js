@@ -8,8 +8,8 @@
 // 通过配置 WS_URL 切换
 // ============================================
 
-import * as Y from './yjs-bundle.js?v=20260710a';
-import { WebsocketProvider, WebrtcProvider } from './yjs-bundle.js?v=20260710a';
+import * as Y from './yjs-bundle.js?v=20260710b';
+import { WebsocketProvider, WebrtcProvider } from './yjs-bundle.js?v=20260710b';
 
 // ============================================
 // 配置区
@@ -191,15 +191,23 @@ export class YjsSync {
       this.provider = new WebsocketProvider(WS_URL, this.roomId, this.doc, {
         connect: true,
         params: this._authToken ? { token: this._authToken } : {},
+        // 重连退避策略：初始 1 秒，最大 30 秒，避免频繁重连
+        reconnectDelay: 1000,
+        maxReconnectDelay: 30000,
       });
 
       let wsConnected = false;
+      this._wsRetryCount = 0;
 
       // 连接状态监听
       this.provider.on('status', (event) => {
         this.connectionState = event.status; // 'connected' | 'disconnected'
         if (event.status === 'connected') {
           wsConnected = true;
+          this._wsRetryCount = 0; // 连接成功后重置重试计数
+        } else if (event.status === 'disconnected') {
+          this._wsRetryCount = (this._wsRetryCount || 0) + 1;
+          console.warn(`[Yjs] WebSocket 断开（第 ${this._wsRetryCount} 次）`);
         }
         this._notifyConnectionChange();
       });

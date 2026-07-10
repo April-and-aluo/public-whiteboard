@@ -2,10 +2,10 @@
 // main.js - 应用入口，协调各模块初始化
 // ============================================
 
-import { CanvasEngine } from './canvas-engine.js?v=20260710a';
-import { CursorLayer } from './cursor-layer.js?v=20260710a';
-import { ExportManager } from './export.js?v=20260710a';
-import { yjsSync } from './yjs-sync.js?v=20260710a';
+import { CanvasEngine } from './canvas-engine.js?v=20260710b';
+import { CursorLayer } from './cursor-layer.js?v=20260710b';
+import { ExportManager } from './export.js?v=20260710b';
+import { yjsSync } from './yjs-sync.js?v=20260710b';
 
 // ===== 全局状态 =====
 let engine = null;
@@ -163,6 +163,16 @@ function initAuthEntry() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
+
+      // 检查是否为非 JSON 响应（如 GitHub Pages 返回 HTML 404 页面）
+      const contentType = resp.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        showError('当前部署环境不支持账号服务，请使用 HTTP 部署地址访问');
+        submitBtn.disabled = false;
+        submitBtn.textContent = authMode === 'login' ? '登录' : '注册';
+        return;
+      }
+
       const data = await resp.json();
 
       if (!resp.ok) {
@@ -215,6 +225,17 @@ async function autoLogin(token, overlay) {
       headers: { 'Content-Type': 'application/json' },
       body,
     });
+    // 检查是否为 JSON 响应（非 JSON 说明 API 不可用，如 GitHub Pages）
+    const contentType = resp.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      // API 不可用，直接进入应用（以访客身份）
+      overlay.style.opacity = '0';
+      setTimeout(() => {
+        overlay.classList.add('hidden');
+        startApp('访客');
+      }, 400);
+      return;
+    }
     if (resp.ok) {
       const data = await resp.json();
       // 保存 token 到内存供 WebSocket 认证
@@ -535,10 +556,13 @@ function startApp(userName) {
     updateScreenEdgeMarkers();
   };
 
-  // 定期更新屏幕边缘标记（捕获远程光标移动）
+  // 定期更新屏幕边缘标记（仅当有远程光标时才执行，减少不必要的计算）
   setInterval(() => {
-    updateScreenEdgeMarkers();
-    cursorLayer.update(yjsSync.getRemoteCursors());
+    const remoteCursors = yjsSync.getRemoteCursors();
+    if (remoteCursors.length > 0) {
+      updateScreenEdgeMarkers();
+      cursorLayer.update(remoteCursors);
+    }
   }, 1000);
 
   // 连接状态变化
@@ -574,10 +598,25 @@ function startApp(userName) {
 
   // 页面关闭时断开连接，通知其他用户
   window.addEventListener('beforeunload', () => {
+    // 清理未完成的空文字元素
+    if (editingTextId) {
+      const texts = yjsSync.getAllTexts();
+      const t = texts.find(tt => tt.id === editingTextId);
+      if (t && (!t.content || t.content.trim() === '')) {
+        yjsSync.removeTextById(editingTextId);
+      }
+    }
     yjsSync.disconnect();
   });
   // 移动端 Safari 兼容
   window.addEventListener('pagehide', () => {
+    if (editingTextId) {
+      const texts = yjsSync.getAllTexts();
+      const t = texts.find(tt => tt.id === editingTextId);
+      if (t && (!t.content || t.content.trim() === '')) {
+        yjsSync.removeTextById(editingTextId);
+      }
+    }
     yjsSync.disconnect();
   });
 
@@ -817,7 +856,13 @@ function handleImageUpload(file) {
       pendingImageProps = { scale: 1, rotation: 0, opacity: 1 };
       showImagePropsPanel(null);
     };
+    img.onerror = () => {
+      alert('图片加载失败，请检查文件是否损坏');
+    };
     img.src = e.target.result;
+  };
+  reader.onerror = () => {
+    alert('文件读取失败，请重试');
   };
   reader.readAsDataURL(file);
 }
@@ -1032,7 +1077,11 @@ function setupImagePropsPanel() {
 
   textContent.addEventListener('input', () => {
     if (selectedType === 'text' && selectedTextId) {
-      yjsSync.updateTextProps(selectedTextId, { content: textContent.value });
+      const content = textContent.value.slice(0, 5000);
+      if (content !== textContent.value) {
+        textContent.value = content;
+      }
+      yjsSync.updateTextProps(selectedTextId, { content });
       if (engine.selectedText) {
         engine.selectedText.content = textContent.value;
         engine.requestRender();
@@ -1080,7 +1129,12 @@ function setupImagePropsPanel() {
   // 实时输入同步：用户每输入一个字符，立即更新画布上的文字
   document.getElementById('text-editor-input').addEventListener('input', (e) => {
     if (editingTextId) {
-      yjsSync.updateTextProps(editingTextId, { content: e.target.value });
+      // 限制文字长度，防止超大文本导致性能问题
+      const content = e.target.value.slice(0, 5000);
+      if (content !== e.target.value) {
+        e.target.value = content;
+      }
+      yjsSync.updateTextProps(editingTextId, { content });
     }
   });
 }
