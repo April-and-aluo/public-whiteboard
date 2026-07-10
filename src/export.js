@@ -99,11 +99,22 @@ export class ExportManager {
     offscreen.height = mainCanvas.height;
     const ctx = offscreen.getContext('2d');
 
-    // 填充纸张背景
-    ctx.fillStyle = '#fefce8';
-    ctx.fillRect(0, 0, offscreen.width, offscreen.height);
+    // 地图模式：先绘制 MapLibre 底图
+    if (this.engine.mapMode && this.engine.mapLayer) {
+      const mapCanvas = this.engine.mapLayer.getCanvas();
+      if (mapCanvas) {
+        ctx.drawImage(mapCanvas, 0, 0, offscreen.width, offscreen.height);
+      } else {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, offscreen.width, offscreen.height);
+      }
+    } else {
+      // 自由涂鸦模式：纸张背景
+      ctx.fillStyle = '#fefce8';
+      ctx.fillRect(0, 0, offscreen.width, offscreen.height);
+    }
 
-    // 复制当前画布内容
+    // 复制当前画布内容（涂鸦层）
     ctx.drawImage(mainCanvas, 0, 0);
 
     // 下载

@@ -2,15 +2,19 @@
 // main.js - 应用入口，协调各模块初始化
 // ============================================
 
-import { CanvasEngine } from './canvas-engine.js?v=20260710b';
-import { CursorLayer } from './cursor-layer.js?v=20260710b';
-import { ExportManager } from './export.js?v=20260710b';
-import { yjsSync } from './yjs-sync.js?v=20260710b';
+import { CanvasEngine } from './canvas-engine.js?v=20260710c';
+import { CursorLayer } from './cursor-layer.js?v=20260710c';
+import { ExportManager } from './export.js?v=20260710c';
+import { yjsSync } from './yjs-sync.js?v=20260710c';
+
+// MapLayer 按需加载（仅地图模式）
 
 // ===== 全局状态 =====
 let engine = null;
 let cursorLayer = null;
 let exportManager = null;
+let mapLayer = null;
+let currentMode = 'free'; // 'free' | 'map'
 let currentTool = 'pen';
 let currentColor = '#1e3a5f';
 let currentWidth = 4;
@@ -194,7 +198,7 @@ function initAuthEntry() {
       overlay.style.opacity = '0';
       setTimeout(() => {
         overlay.classList.add('hidden');
-        startApp(data.username);
+        showModeSelect(data.username);
       }, 400);
     } catch (err) {
       showError('网络错误，请检查连接');
@@ -228,11 +232,11 @@ async function autoLogin(token, overlay) {
     // 检查是否为 JSON 响应（非 JSON 说明 API 不可用，如 GitHub Pages）
     const contentType = resp.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-      // API 不可用，直接进入应用（以访客身份）
+      // API 不可用，直接进入模式选择（以访客身份）
       overlay.style.opacity = '0';
       setTimeout(() => {
         overlay.classList.add('hidden');
-        startApp('访客');
+        showModeSelect('访客');
       }, 400);
       return;
     }
@@ -245,7 +249,7 @@ async function autoLogin(token, overlay) {
       overlay.style.opacity = '0';
       setTimeout(() => {
         overlay.classList.add('hidden');
-        startApp(data.username);
+        showModeSelect(data.username);
       }, 400);
     } else {
       deleteCookie('wb_username');
@@ -293,9 +297,55 @@ async function checkAnnouncement() {
   }
 }
 
+// ===== 模式选择 =====
+
+let selectedUserName = null;
+
+function showModeSelect(userName) {
+  selectedUserName = userName;
+  const overlay = document.getElementById('mode-select-overlay');
+  if (!overlay) {
+    // 如果没有模式选择 UI，直接进入自由涂鸦
+    startApp(userName, 'free');
+    return;
+  }
+  overlay.classList.remove('hidden');
+
+  const freeCard = document.getElementById('mode-free');
+  const mapCard = document.getElementById('mode-map');
+
+  const selectMode = (mode) => {
+    overlay.style.opacity = '0';
+    setTimeout(() => {
+      overlay.classList.add('hidden');
+      overlay.style.opacity = '';
+      startApp(selectedUserName, mode);
+    }, 300);
+  };
+
+  freeCard.onclick = () => selectMode('free');
+  mapCard.onclick = () => selectMode('map');
+}
+
+// ===== 地图模式初始化 =====
+
+async function initMapLayer() {
+  try {
+    const { MapLayer } = await import('./map-layer.js?v=20260710c');
+    const app = document.getElementById('app');
+    mapLayer = new MapLayer(app, engine);
+    await mapLayer.init();
+    engine.mapMode = true;
+    engine.mapLayer = mapLayer;
+  } catch (err) {
+    console.warn('[地图模式] 初始化失败，以无地图背景继续:', err);
+  }
+}
+
 // ===== 启动应用 =====
 
-function startApp(userName) {
+function startApp(userName, mode = 'free') {
+  currentMode = mode;
   const app = document.getElementById('app');
   app.classList.remove('hidden');
 
@@ -319,8 +369,16 @@ function startApp(userName) {
     () => yjsSync.getAllTexts()
   );
 
-  // 连接 Yjs 同步（传递 token 用于 WebSocket 认证）
-  yjsSync.connect(userName, sessionToken || '');
+  // 根据模式选择房间 ID
+  const roomId = mode === 'map' ? 'map-board' : 'free-board';
+
+  // 连接 Yjs 同步（传递 token 用于 WebSocket 认证，传入 roomId 区分房间）
+  yjsSync.connect(userName, sessionToken || '', roomId);
+
+  // 地图模式：初始化 MapLibre 地图背景层
+  if (mode === 'map') {
+    initMapLayer();
+  }
 
   // ===== 设置回调 =====
 
@@ -595,6 +653,7 @@ function startApp(userName) {
   setupUserListToggle();
   setupImagePropsPanel();
   setupRewardButton();
+  setupDragDropImage();
 
   // 页面关闭时断开连接，通知其他用户
   window.addEventListener('beforeunload', () => {
@@ -1135,6 +1194,92 @@ function setupImagePropsPanel() {
         e.target.value = content;
       }
       yjsSync.updateTextProps(editingTextId, { content });
+    }
+  });
+}
+
+// ===== 拖拽图片到网页 =====
+
+function setupDragDropImage() {
+  let dragOverlay = null;
+  let dragCounter = 0;
+
+  // 创建拖拽提示遮罩
+  function createOverlay() {
+    const div = document.createElement('div');
+    div.id = 'drag-drop-overlay';
+    div.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(30, 58, 95, 0.3); backdrop-filter: blur(4px);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 9999; pointer-events: none; opacity: 0;
+      transition: opacity 0.2s;
+    `;
+    div.innerHTML = `
+      <div style="
+        background: rgba(255,255,255,0.95); border-radius: 16px;
+        padding: 40px 60px; text-align: center;
+        border: 3px dashed #1e3a5f; box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+      ">
+        <div style="font-size: 48px; margin-bottom: 12px;">🖼️</div>
+        <div style="font-size: 20px; color: #1e3a5f; font-weight: 600;">松开以添加图片</div>
+        <div style="font-size: 14px; color: #888; margin-top: 8px;">支持 JPG / PNG / GIF / WebP，最大 10MB</div>
+      </div>
+    `;
+    return div;
+  }
+
+  window.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    // 仅处理包含文件的拖拽
+    if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
+    dragCounter++;
+    if (!dragOverlay) {
+      dragOverlay = createOverlay();
+      document.body.appendChild(dragOverlay);
+      requestAnimationFrame(() => { dragOverlay.style.opacity = '1'; });
+    }
+  });
+
+  window.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    // 阻止默认行为以允许 drop
+  });
+
+  window.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      if (dragOverlay) {
+        dragOverlay.style.opacity = '0';
+        setTimeout(() => {
+          if (dragOverlay) { dragOverlay.remove(); dragOverlay = null; }
+        }, 200);
+      }
+    }
+  });
+
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    if (dragOverlay) {
+      dragOverlay.style.opacity = '0';
+      setTimeout(() => {
+        if (dragOverlay) { dragOverlay.remove(); dragOverlay = null; }
+      }, 200);
+    }
+
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+
+    // 取第一个图片文件
+    for (const file of files) {
+      if (file.type.startsWith('image/')) {
+        handleImageUpload(file);
+        break;
+      }
     }
   });
 }

@@ -8,8 +8,8 @@
 // 通过配置 WS_URL 切换
 // ============================================
 
-import * as Y from './yjs-bundle.js?v=20260710b';
-import { WebsocketProvider, WebrtcProvider } from './yjs-bundle.js?v=20260710b';
+import * as Y from './yjs-bundle.js?v=20260710c';
+import { WebsocketProvider, WebrtcProvider } from './yjs-bundle.js?v=20260710c';
 
 // ============================================
 // 配置区
@@ -36,7 +36,7 @@ const USER_COLORS = [
 ];
 
 export class YjsSync {
-  constructor(roomId = 'public-board') {
+  constructor(roomId = 'free-board') {
     this.roomId = roomId;
     this.doc = null;
     this.provider = null;
@@ -53,7 +53,8 @@ export class YjsSync {
   }
 
   // 初始化连接
-  connect(userName, authToken) {
+  connect(userName, authToken, roomId = null) {
+    if (roomId) this.roomId = roomId;
     this.userName = userName;
     this._authToken = authToken || null;
     this.userId = this._generateId();

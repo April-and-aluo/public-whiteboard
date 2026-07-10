@@ -74,6 +74,10 @@ export class CanvasEngine {
     this.selectedText = null; // 当前选中的文字对象（用于高亮显示）
     this.isEditMode = false; // 是否在编辑模式（属性面板打开时）
 
+    // 地图模式支持
+    this.mapMode = false; // 是否为地图模式
+    this.mapLayer = null; // MapLayer 实例（地图模式下使用）
+
     this._setupCanvas();
     this._setupEventListeners();
   }
@@ -111,6 +115,9 @@ export class CanvasEngine {
     this.mainCanvas.addEventListener('pointerleave', this._onPointerLeave.bind(this));
     this.mainCanvas.addEventListener('wheel', this._onWheel.bind(this), { passive: false });
 
+    // 阻止浏览器右键菜单，右键用于平移画布
+    this.mainCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
     // 阻止触摸默认行为
     this.mainCanvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
     this.mainCanvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
@@ -120,6 +127,17 @@ export class CanvasEngine {
 
   // 屏幕坐标 -> 世界坐标
   screenToWorld(sx, sy) {
+    // 地图模式：使用 MapLibre 的投影
+    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
+      const lngLat = this.mapLayer.screenToLngLat(sx, sy);
+      if (lngLat) {
+        // 转换为墨卡托世界坐标（与 _lngLatToWorld 一致）
+        const latRad = lngLat.lat * Math.PI / 180;
+        const y = 180 / Math.PI * Math.log(Math.tan(Math.PI / 4 + latRad / 2));
+        return { x: lngLat.lng, y };
+      }
+    }
+    // 自由涂鸦模式：仿射变换
     return {
       x: (sx - this.offsetX) / this.scale,
       y: (sy - this.offsetY) / this.scale,
@@ -128,6 +146,15 @@ export class CanvasEngine {
 
   // 世界坐标 -> 屏幕坐标
   worldToScreen(wx, wy) {
+    // 地图模式：使用 MapLibre 的投影
+    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
+      // 世界坐标 -> 经纬度
+      const yRad = wy * Math.PI / 180;
+      const lat = 180 / Math.PI * (2 * Math.atan(Math.exp(yRad)) - Math.PI / 2);
+      const screen = this.mapLayer.lngLatToScreen(wx, lat);
+      if (screen) return { x: screen.x, y: screen.y };
+    }
+    // 自由涂鸦模式：仿射变换
     return {
       x: wx * this.scale + this.offsetX,
       y: wy * this.scale + this.offsetY,
@@ -167,8 +194,8 @@ export class CanvasEngine {
 
     const world = this.screenToWorld(point.x, point.y);
 
-    // 中键或空格+拖拽 -> 平移
-    if (e.button === 1 || this._isSpacePressed) {
+    // 中键、右键或空格+左键 -> 平移
+    if (e.button === 1 || e.button === 2 || this._isSpacePressed) {
       this._startPan(point.x, point.y);
       return;
     }
@@ -249,9 +276,17 @@ export class CanvasEngine {
     if (this.isPanning) {
       const dx = point.x - this.panStartX;
       const dy = point.y - this.panStartY;
-      this.offsetX = this.panStartOffsetX + dx;
-      this.offsetY = this.panStartOffsetY + dy;
-      this.render();
+      // 地图模式：转发给 MapLibre
+      if (this.mapMode && this.mapLayer && this.mapLayer.map) {
+        this.mapLayer.map.panBy([-dx, -dy], { animate: false });
+        this.panStartX = point.x;
+        this.panStartY = point.y;
+      } else {
+        // 自由涂鸦模式：直接修改 offset
+        this.offsetX = this.panStartOffsetX + dx;
+        this.offsetY = this.panStartOffsetY + dy;
+        this.render();
+      }
       this._notifyViewportChange();
       return;
     }
@@ -337,10 +372,37 @@ export class CanvasEngine {
   _onWheel(e) {
     e.preventDefault();
     const point = this._getCanvasPoint(e);
+
+    // 地图模式：转发给 MapLibre
+    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
+      const currentZoom = this.mapLayer.map.getZoom();
+      // 缩放因子：Ctrl+滚轮精确缩放（步幅更小）
+      let zoomDelta;
+      if (e.ctrlKey) {
+        zoomDelta = e.deltaY > 0 ? -0.1 : 0.1; // 精确缩放
+      } else {
+        zoomDelta = e.deltaY > 0 ? -0.5 : 0.5; // 普通缩放
+      }
+      const newZoom = Math.max(0, Math.min(8, currentZoom + zoomDelta));
+      // 以光标位置为中心缩放
+      const lngLat = this.mapLayer.screenToLngLat(point.x, point.y);
+      this.mapLayer.map.jumpTo({
+        zoom: newZoom,
+        center: lngLat ? [lngLat.lng, lngLat.lat] : undefined,
+      });
+      return;
+    }
+
+    // 自由涂鸦模式：仿射变换缩放
     const worldBefore = this.screenToWorld(point.x, point.y);
 
-    // 缩放因子
-    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    // 缩放因子：Ctrl+滚轮精确缩放（步幅更小）
+    let zoomFactor;
+    if (e.ctrlKey) {
+      zoomFactor = e.deltaY > 0 ? 0.97 : 1.03; // 精确缩放：3% 步幅
+    } else {
+      zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;   // 普通缩放：10% 步幅
+    }
     const newScale = Math.max(0.1, Math.min(10, this.scale * zoomFactor));
 
     // 以光标为中心缩放
@@ -379,6 +441,11 @@ export class CanvasEngine {
     this.pinchStartDist = Math.sqrt(dx * dx + dy * dy);
     this.pinchStartScale = this.scale;
 
+    // 地图模式：记录初始 zoom
+    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
+      this.pinchStartZoom = this.mapLayer.map.getZoom();
+    }
+
     this.pinchCenter = {
       x: (pointers[0].x + pointers[1].x) / 2,
       y: (pointers[0].y + pointers[1].y) / 2,
@@ -409,6 +476,17 @@ export class CanvasEngine {
 
     const newScale = Math.max(0.1, Math.min(10, this.pinchStartScale * (dist / this.pinchStartDist)));
 
+    // 地图模式：转发给 MapLibre
+    if (this.mapMode && this.mapLayer && this.mapLayer.map) {
+      // 计算缩放级别变化
+      const zoomDelta = Math.log2(dist / this.pinchStartDist);
+      const currentZoom = this.mapLayer.map.getZoom();
+      const newZoom = Math.max(0, Math.min(8, this.pinchStartZoom + zoomDelta));
+      this.mapLayer.map.jumpTo({ zoom: newZoom });
+      return;
+    }
+
+    // 自由涂鸦模式：仿射变换
     // 缩放围绕初始世界点 + 平移跟随手指中心移动
     this.scale = newScale;
     this.offsetX = currentCenter.x - this.pinchStartWorld.x * this.scale;

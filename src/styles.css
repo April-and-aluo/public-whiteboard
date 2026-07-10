@@ -1235,6 +1235,98 @@ html, body {
   box-shadow: 1px 1px 0 var(--shadow);
 }
 
+/* ===== 模式选择界面 ===== */
+
+.mode-select-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(66, 32, 6, 0.5);
+  z-index: 9000;
+  opacity: 1;
+  transition: opacity 0.4s;
+}
+
+.mode-select-overlay.hidden {
+  display: none;
+}
+
+.mode-select-container {
+  background: var(--paper, #fefce8);
+  border: 2px solid var(--ink, #422006);
+  border-radius: 20px;
+  padding: 40px 48px;
+  text-align: center;
+  box-shadow: 4px 4px 0 var(--shadow, rgba(66,32,6,0.15));
+  max-width: 600px;
+  width: 90%;
+}
+
+.mode-select-title {
+  font-family: 'Caveat', cursive;
+  font-size: 36px;
+  color: var(--ink, #422006);
+  margin-bottom: 32px;
+}
+
+.mode-cards {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+}
+
+@media (max-width: 600px) {
+  .mode-cards {
+    flex-direction: column;
+  }
+}
+
+.mode-card {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.6);
+  border: 2px solid var(--ink, #422006);
+  border-radius: 16px;
+  padding: 32px 24px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.mode-card:hover {
+  background: rgba(255, 255, 255, 0.9);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(66, 32, 6, 0.15);
+}
+
+.mode-card:active {
+  transform: translateY(0);
+}
+
+.mode-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.mode-card-title {
+  font-family: 'Patrick Hand', cursive;
+  font-size: 22px;
+  color: var(--ink, #422006);
+  margin: 0;
+}
+
+.mode-card-desc {
+  font-size: 14px;
+  color: #888;
+  margin: 0;
+}
+
 .reward-overlay {
   position: fixed;
   inset: 0;

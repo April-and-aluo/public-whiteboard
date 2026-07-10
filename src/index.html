@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>公共展示板</title>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss: https://cdn.jsdelivr.net; img-src 'self' data: blob: https:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss: https://cdn.jsdelivr.net https://unpkg.com; img-src 'self' data: blob: https:;">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Patrick+Hand&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260710b">
-  <script src="config.js?v=20260710b"></script>
+  <link rel="stylesheet" href="styles.css?v=20260710c">
+  <script src="config.js?v=20260710c"></script>
 </head>
 <body>
   <!-- 账号登录/注册弹窗 -->
@@ -51,6 +51,41 @@
       <div id="auth-error" class="auth-error hidden"></div>
 
       <button id="auth-submit" class="nickname-btn">登录</button>
+    </div>
+  </div>
+
+  <!-- 模式选择弹窗（登录成功后显示） -->
+  <div id="mode-select-overlay" class="mode-select-overlay hidden">
+    <div class="mode-select-container">
+      <h2 class="mode-select-title">选择模式</h2>
+      <div class="mode-cards">
+        <div id="mode-free" class="mode-card">
+          <div class="mode-card-icon">
+            <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+              <path d="M8 48 Q16 16 28 28 T52 20" stroke="#422006" stroke-width="3" stroke-linecap="round" fill="none"/>
+              <circle cx="52" cy="20" r="4" fill="#422006"/>
+              <path d="M12 52 L48 52" stroke="#422006" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 4"/>
+              <path d="M20 36 L30 40 L25 48 Z" fill="none" stroke="#422006" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3 class="mode-card-title">自由涂鸦</h3>
+          <p class="mode-card-desc">自由发挥，无限画布</p>
+        </div>
+        <div id="mode-map" class="mode-card">
+          <div class="mode-card-icon">
+            <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+              <circle cx="32" cy="32" r="26" stroke="#422006" stroke-width="2.5" fill="none"/>
+              <path d="M6 32 H58" stroke="#422006" stroke-width="1.5"/>
+              <path d="M32 6 V58" stroke="#422006" stroke-width="1.5"/>
+              <path d="M14 18 Q24 14 32 18 T50 22" stroke="#422006" stroke-width="1.5" fill="none"/>
+              <path d="M14 46 Q24 42 32 46 T50 50" stroke="#422006" stroke-width="1.5" fill="none"/>
+              <path d="M20 28 L28 24 L36 28 L44 24" stroke="#422006" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3 class="mode-card-title">世界地图</h3>
+          <p class="mode-card-desc">在地图上标注创作</p>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -294,6 +329,6 @@
   </div>
 
   <!-- WS_URL 由 config.js 统一管理，此处不再覆盖 -->
-  <script type="module" src="main.js?v=20260710b"></script>
+  <script type="module" src="main.js?v=20260710c"></script>
 </body>
 </html>

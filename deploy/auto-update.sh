@@ -23,6 +23,7 @@ FRONTEND_FILES=(
   "src/config.js"
   "src/cursor-layer.js"
   "src/export.js"
+  "src/map-layer.js"
   "src/reward-qrcode.png"
   "announcement.json"
 )
