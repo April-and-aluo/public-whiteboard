@@ -2,10 +2,10 @@
 // main.js - 应用入口，协调各模块初始化
 // ============================================
 
-import { CanvasEngine } from './canvas-engine.js?v=20260711a';
-import { CursorLayer } from './cursor-layer.js?v=20260711a';
-import { ExportManager } from './export.js?v=20260711a';
-import { yjsSync } from './yjs-sync.js?v=20260711a';
+import { CanvasEngine } from './canvas-engine.js?v=20260711b';
+import { CursorLayer } from './cursor-layer.js?v=20260711b';
+import { ExportManager } from './export.js?v=20260711b';
+import { yjsSync } from './yjs-sync.js?v=20260711b';
 
 // MapLayer 按需加载（仅地图模式）
 
@@ -331,7 +331,7 @@ function showModeSelect(userName) {
 
 async function initMapLayer() {
   try {
-    const { MapLayer } = await import('./map-layer.js?v=20260711a');
+    const { MapLayer } = await import('./map-layer.js?v=20260711b');
     const app = document.getElementById('app');
     mapLayer = new MapLayer(app, engine);
     await mapLayer.init();

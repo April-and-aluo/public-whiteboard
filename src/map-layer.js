@@ -1,263 +1,309 @@
 // ============================================
-// map-layer.js - 地图背景层
+// map-layer.js - 地图背景层（分区块加载版）
 // ============================================
-// 在地图模式下作为画布底层的地图背景
-// 优先使用 MapLibre GL JS（WebGL），回退到 Canvas 2D
-// 显示国家边界 + 省/州行政区划边界
-// 与上层 CanvasEngine 涂鸦层视口同步
+// 高精度地图数据按 20°×20° 网格分块
+// 只加载视口可见范围内的区块，降低服务器压力
+// 国家边界一次性加载（低精度概览）
+// 行政区划按需分块加载（高精度 GeoBoundaries）
 // ============================================
 
 export class MapLayer {
   constructor(container, canvasEngine) {
     this.container = container;
     this.engine = canvasEngine;
-    this.map = null;          // MapLibre 实例
-    this.fallback = null;     // Canvas2D 回退实例
+    this.map = null;
+    this.fallback = null;
     this.onViewportChange = null;
     this._initialized = false;
-    this._mode = 'none';      // 'maplibre' | 'canvas2d' | 'none'
-    this._maxZoom = 10;       // 最大缩放级别（限制放大）
-    this._minZoom = 1.5;      // 最小缩放级别（限制看到全球）
-    this._admin1MinZoom = 3;  // 行政区划在 zoom >= 3 时才显示
+    this._mode = 'none';
+    this._maxZoom = 10;
+    this._minZoom = 3;        // 大幅提高最小缩放：不允许看到大洲全貌
+    this._tileSize = 20;      // 区块大小（度）
+    this._loadedTiles = new Map();    // tileId -> features[]
+    this._loadingTiles = new Set();   // 正在加载的区块
+    this._tileUpdateTimer = null;     // 防抖计时器
+    this._manifest = null;
   }
 
   async init() {
-    // 检查 WebGL 是否可用
     const webglAvailable = this._checkWebGL();
-
     if (webglAvailable) {
       try {
         await this._initMapLibre();
         return;
       } catch (err) {
-        console.warn('[MapLayer] MapLibre 初始化失败，回退到 Canvas 2D:', err.message);
+        console.warn('[MapLayer] MapLibre 失败，回退 Canvas 2D:', err.message);
       }
     } else {
-      console.warn('[MapLayer] WebGL 不可用，使用 Canvas 2D 回退方案');
+      console.warn('[MapLayer] WebGL 不可用，使用 Canvas 2D');
     }
-
-    // Canvas 2D 回退
     try {
       await this._initCanvas2D();
     } catch (err) {
-      console.warn('[MapLayer] Canvas 2D 回退也失败，以纯白背景继续:', err);
+      console.warn('[MapLayer] Canvas 2D 也失败:', err);
       this.container.style.background = '#ffffff';
       this._mode = 'none';
     }
   }
 
-  // 检查 WebGL 是否可用
   _checkWebGL() {
     try {
-      const canvas = document.createElement('canvas');
-      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-      return !!gl;
+      const c = document.createElement('canvas');
+      return !!(c.getContext('webgl') || c.getContext('experimental-webgl'));
+    } catch (e) { return false; }
+  }
+
+  // ===== 区块加载核心逻辑 =====
+
+  // 计算视口可见的区块 ID 列表（含一圈缓冲区）
+  _getVisibleTileIds(lngMin, latMin, lngMax, latMax) {
+    const ts = this._tileSize;
+    const buf = ts; // 一圈缓冲
+    const startLng = Math.floor((lngMin - buf) / ts) * ts;
+    const endLng = Math.ceil((lngMax + buf) / ts) * ts;
+    const startLat = Math.floor((latMin - buf) / ts) * ts;
+    const endLat = Math.ceil((latMax + buf) / ts) * ts;
+    const ids = [];
+    for (let lat = startLat; lat < endLat; lat += ts) {
+      for (let lng = startLng; lng < endLng; lng += ts) {
+        ids.push(`${lng}_${lat}`);
+      }
+    }
+    return ids;
+  }
+
+  // 防抖更新区块
+  _scheduleTileUpdate() {
+    if (this._tileUpdateTimer) clearTimeout(this._tileUpdateTimer);
+    this._tileUpdateTimer = setTimeout(() => this._updateTiles(), 200);
+  }
+
+  // 加载新区块、卸载远离的区块
+  async _updateTiles() {
+    if (!this._initialized) return;
+
+    let lngMin, latMin, lngMax, latMax;
+    if (this._mode === 'maplibre' && this.map) {
+      const b = this.map.getBounds();
+      lngMin = b.getWest(); lngMax = b.getEast();
+      latMin = b.getSouth(); latMax = b.getNorth();
+    } else if (this._mode === 'canvas2d' && this.fallback) {
+      const vp = this._getCanvasViewport();
+      lngMin = vp.lngMin; lngMax = vp.lngMax;
+      latMin = vp.latMin; latMax = vp.latMax;
+    } else {
+      return;
+    }
+
+    const visibleIds = new Set(this._getVisibleTileIds(lngMin, latMin, lngMax, latMax));
+
+    // 卸载不可见的区块（保留两圈缓冲内的）
+    const unloadBuffer = this._tileSize * 2;
+    for (const [tileId] of this._loadedTiles) {
+      if (!visibleIds.has(tileId)) {
+        const [tlng, tlat] = tileId.split('_').map(Number);
+        // 只卸载远离视口的区块
+        if (tlng < lngMin - unloadBuffer || tlng > lngMax + unloadBuffer ||
+            tlat < latMin - unloadBuffer || tlat > latMax + unloadBuffer) {
+          this._loadedTiles.delete(tileId);
+        }
+      }
+    }
+
+    // 加载可见但未加载的区块
+    const toLoad = [];
+    for (const id of visibleIds) {
+      if (!this._loadedTiles.has(id) && !this._loadingTiles.has(id)) {
+        toLoad.push(id);
+      }
+    }
+
+    // 限制并发加载数量
+    const MAX_CONCURRENT = 4;
+    const batch = toLoad.slice(0, MAX_CONCURRENT);
+    for (const id of batch) {
+      this._loadTile(id);
+    }
+    // 剩余的稍后加载
+    if (toLoad.length > MAX_CONCURRENT) {
+      setTimeout(() => {
+        for (const id of toLoad.slice(MAX_CONCURRENT)) {
+          if (!this._loadedTiles.has(id) && !this._loadingTiles.has(id)) {
+            this._loadTile(id);
+          }
+        }
+      }, 500);
+    }
+
+    this._refreshAdmin1Data();
+  }
+
+  async _loadTile(tileId) {
+    if (this._loadedTiles.has(tileId) || this._loadingTiles.has(tileId)) return;
+    this._loadingTiles.add(tileId);
+
+    try {
+      const resp = await fetch(`/map-data/tiles/${tileId}/admin1.geojson`);
+      if (!resp.ok) { this._loadingTiles.delete(tileId); return; }
+      const data = await resp.json();
+      const features = data.features || [];
+      if (features.length > 0) {
+        // 预处理日期变更线
+        const processed = this._preprocessGeoJSON({ features });
+        this._loadedTiles.set(tileId, processed.features);
+      } else {
+        this._loadedTiles.set(tileId, []);
+      }
+      this._refreshAdmin1Data();
     } catch (e) {
-      return false;
+      // 区块不存在或加载失败，静默跳过
+    } finally {
+      this._loadingTiles.delete(tileId);
+    }
+  }
+
+  // 将所有已加载区块的数据合并，更新到地图/画布
+  _refreshAdmin1Data() {
+    const allFeatures = [];
+    const seen = new Set();
+    for (const [, feats] of this._loadedTiles) {
+      for (const f of feats) {
+        // 去重（同一要素可能出现在多个区块中）
+        const key = (f.properties?.name || '') + '_' + (f.properties?.country || '') +
+          '_' + (f.geometry?.coordinates?.[0]?.[0]?.[0] || '');
+        if (!seen.has(key)) {
+          seen.add(key);
+          allFeatures.push(f);
+        }
+      }
+    }
+
+    if (this._mode === 'maplibre' && this.map) {
+      const src = this.map.getSource('admin1');
+      if (src) {
+        src.setData({ type: 'FeatureCollection', features: allFeatures });
+      }
+    } else if (this._mode === 'canvas2d' && this.fallback) {
+      this.fallback.admin1 = { type: 'FeatureCollection', features: allFeatures };
+      this._renderFallback();
     }
   }
 
   // ===== MapLibre GL JS 模式 =====
+
   async _initMapLibre() {
-    // 通过 <script> 标签加载 MapLibre GL JS
     if (!window.maplibregl) {
       await new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
-        script.onload = resolve;
-        script.onerror = () => reject(new Error('MapLibre GL JS 加载失败'));
-        document.head.appendChild(script);
+        const s = document.createElement('script');
+        s.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+        s.onload = resolve;
+        s.onerror = () => reject(new Error('MapLibre 加载失败'));
+        document.head.appendChild(s);
       });
     }
-    const maplibregl = window.maplibregl;
-
-    // 加载 CSS
     if (!document.getElementById('maplibre-css')) {
       const link = document.createElement('link');
-      link.id = 'maplibre-css';
-      link.rel = 'stylesheet';
+      link.id = 'maplibre-css'; link.rel = 'stylesheet';
       link.href = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
       document.head.appendChild(link);
     }
 
-    // 创建地图容器
     const mapDiv = document.createElement('div');
     mapDiv.id = 'map-container';
-    mapDiv.style.cssText = `
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      z-index: 0;
-      background: #ffffff;
-    `;
+    mapDiv.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;background:#fff;`;
     const mainCanvas = document.getElementById('main-canvas');
     mainCanvas.parentElement.insertBefore(mapDiv, mainCanvas);
     mainCanvas.style.zIndex = '1';
     mainCanvas.style.background = 'transparent';
 
-    // 并行加载 GeoJSON 数据
-    const [countryData, admin1Data] = await Promise.all([
-      this._loadGeoJSON('/map-data/countries.geojson').catch(() => null),
-      this._loadGeoJSON('/map-data/admin1.geojson').catch(() => null),
-    ]);
-
-    // 预处理：切割跨日期变更线的多边形，防止横向直线伪影
+    // 只加载国家边界（低精度概览，1.8MB）
+    const countryData = await this._loadGeoJSON('/map-data/countries.geojson').catch(() => null);
     const processedCountries = countryData ? this._preprocessGeoJSON(countryData) : null;
-    const processedAdmin1 = admin1Data ? this._preprocessGeoJSON(admin1Data) : null;
 
-    // 使用内置样式（不依赖 style.json），程序化添加数据源和图层
     const style = {
-      version: 8,
-      sources: {},
-      layers: [
-        {
-          id: 'background',
-          type: 'background',
-          paint: { 'background-color': '#ffffff' }
-        }
-      ]
+      version: 8, sources: {},
+      layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#fff' } }]
     };
 
     this.map = new maplibregl.Map({
-      container: mapDiv,
-      style: style,
-      center: [0, 20],
-      zoom: 2,               // 初始 zoom 从 2 开始（不显示全球）
-      minZoom: this._minZoom,
-      maxZoom: this._maxZoom,
+      container: mapDiv, style,
+      center: [0, 30], zoom: 3.5,
+      minZoom: this._minZoom, maxZoom: this._maxZoom,
       attributionControl: false,
-      dragPan: false,
-      scrollZoom: false,
-      doubleClickZoom: false,
-      touchZoomRotate: false,
-      keyboard: false,
+      dragPan: false, scrollZoom: false, doubleClickZoom: false,
+      touchZoomRotate: false, keyboard: false,
     });
 
     this.map.on('load', () => {
-      // 添加国家数据源
+      // 国家填充和边界
       if (processedCountries) {
-        this.map.addSource('countries', {
-          type: 'geojson',
-          data: processedCountries,
+        this.map.addSource('countries', { type: 'geojson', data: processedCountries });
+        this.map.addLayer({
+          id: 'country-fill', type: 'fill', source: 'countries',
+          paint: { 'fill-color': '#f5f5f0', 'fill-opacity': 1 },
         });
         this.map.addLayer({
-          id: 'country-fill',
-          type: 'fill',
-          source: 'countries',
+          id: 'country-borders', type: 'line', source: 'countries',
           paint: {
-            'fill-color': '#f5f5f0',
-            'fill-opacity': 1,
-          },
-        });
-      }
-
-      // 添加行政区划数据源（渐进加载：zoom >= 3 才显示）
-      if (processedAdmin1) {
-        this.map.addSource('admin1', {
-          type: 'geojson',
-          data: processedAdmin1,
-        });
-        this.map.addLayer({
-          id: 'admin1-borders',
-          type: 'line',
-          source: 'admin1',
-          minzoom: this._admin1MinZoom,  // zoom < 3 时不渲染
-          paint: {
-            'line-color': '#d0d0c8',
-            'line-width': [
-              'interpolate', ['linear'], ['zoom'],
-              3, 0.4, 5, 0.6, 7, 0.8, 10, 1.5
-            ],
-            'line-opacity': [
-              'interpolate', ['linear'], ['zoom'],
-              3, 0.3, 4, 0.6, 6, 0.7
-            ],
-          },
-          layout: { 'line-join': 'round', 'line-cap': 'round' },
-        });
-      }
-
-      // 添加国家边界图层（在最上层）
-      if (processedCountries) {
-        this.map.addLayer({
-          id: 'country-borders',
-          type: 'line',
-          source: 'countries',
-          paint: {
-            'line-color': '#999999',
-            'line-width': [
-              'interpolate', ['linear'], ['zoom'],
-              0, 0.5, 2, 0.7, 4, 1.0, 6, 1.5, 10, 3.0
-            ],
+            'line-color': '#999',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 5, 1.2, 7, 2.0, 10, 3.0],
             'line-opacity': 0.8,
           },
           layout: { 'line-join': 'round', 'line-cap': 'round' },
         });
       }
 
-      console.log('[MapLayer] MapLibre 地图加载完成 (国家:' +
-        (processedCountries ? processedCountries.features.length : 0) + ', 行政区:' +
-        (processedAdmin1 ? processedAdmin1.features.length : 0) + ')');
+      // 行政区划（空数据源，按区块动态填充）
+      this.map.addSource('admin1', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      this.map.addLayer({
+        id: 'admin1-borders', type: 'line', source: 'admin1',
+        paint: {
+          'line-color': '#c8c8c0',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.5, 5, 0.7, 7, 1.0, 10, 2.0],
+          'line-opacity': 0.6,
+        },
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+      });
+
       this._initialized = true;
       this._mode = 'maplibre';
       this._syncToEngine();
+      this._updateTiles();
     });
 
     this.map.on('move', () => this._syncToEngine());
-    this.map.on('moveend', () => this._syncToEngine());
+    this.map.on('moveend', () => { this._syncToEngine(); this._scheduleTileUpdate(); });
   }
 
   // ===== Canvas 2D 回退模式 =====
-  async _initCanvas2D() {
-    // 并行加载国家边界和行政区划数据
-    const [countryData, admin1Data] = await Promise.all([
-      this._loadGeoJSON('/map-data/countries.geojson'),
-      this._loadGeoJSON('/map-data/admin1.geojson'),
-    ]);
 
-    // 创建地图 canvas
+  async _initCanvas2D() {
+    const countryData = await this._loadGeoJSON('/map-data/countries.geojson');
+    const processedCountries = this._preprocessGeoJSON(countryData);
+
     const mapCanvas = document.createElement('canvas');
     mapCanvas.id = 'map-canvas-2d';
-    mapCanvas.style.cssText = `
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      z-index: 0;
-      background: #ffffff;
-      pointer-events: none;
-    `;
+    mapCanvas.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;background:#fff;pointer-events:none;`;
     const mainCanvas = document.getElementById('main-canvas');
     mainCanvas.parentElement.insertBefore(mapCanvas, mainCanvas);
     mainCanvas.style.zIndex = '1';
     mainCanvas.style.background = 'transparent';
 
-    const ctx = mapCanvas.getContext('2d');
-
-    // 预处理 GeoJSON：将跨日期变更线的多边形切割
-    const processedCountries = this._preprocessGeoJSON(countryData);
-    const processedAdmin1 = this._preprocessGeoJSON(admin1Data);
-
     this.fallback = {
-      canvas: mapCanvas,
-      ctx: ctx,
+      canvas: mapCanvas, ctx: mapCanvas.getContext('2d'),
       countries: processedCountries,
-      admin1: processedAdmin1,
-      centerLng: 0,
-      centerLat: 20,
-      zoom: 2,               // 初始 zoom 从 2 开始
+      admin1: { type: 'FeatureCollection', features: [] },
+      centerLng: 0, centerLat: 30, zoom: 3.5,
     };
 
-    // 设置 canvas 尺寸
     this._resizeFallbackCanvas();
-
-    // 监听窗口大小变化
     this._resizeHandler = () => this._resizeFallbackCanvas();
     window.addEventListener('resize', this._resizeHandler);
 
-    console.log('[MapLayer] Canvas 2D 地图初始化完成 (国家:' + processedCountries.features.length + ', 行政区:' + processedAdmin1.features.length + ')');
     this._initialized = true;
     this._mode = 'canvas2d';
     this._syncToEngine();
+    this._updateTiles();
   }
 
   async _loadGeoJSON(url) {
@@ -268,132 +314,73 @@ export class MapLayer {
 
   // 预处理 GeoJSON：切割跨日期变更线的多边形
   _preprocessGeoJSON(geoData) {
-    const result = {
-      type: 'FeatureCollection',
-      features: [],
-    };
-
+    const result = { type: 'FeatureCollection', features: [] };
     for (const feature of geoData.features) {
       const processed = this._splitAntimeridianFeature(feature);
       result.features.push(...processed);
     }
-
     return result;
   }
 
-  // 切割跨日期变更线的 feature
   _splitAntimeridianFeature(feature) {
     if (!feature.geometry) return [feature];
-
     const geom = feature.geometry;
     const results = [];
-
     if (geom.type === 'Polygon') {
       const split = this._splitAntimeridianPolygon(geom.coordinates);
       for (const poly of split) {
-        results.push({
-          ...feature,
-          geometry: { type: 'Polygon', coordinates: poly },
-        });
+        results.push({ ...feature, geometry: { type: 'Polygon', coordinates: poly } });
       }
     } else if (geom.type === 'MultiPolygon') {
       for (const polygon of geom.coordinates) {
         const split = this._splitAntimeridianPolygon(polygon);
         for (const poly of split) {
-          results.push({
-            ...feature,
-            geometry: { type: 'Polygon', coordinates: poly },
-          });
+          results.push({ ...feature, geometry: { type: 'Polygon', coordinates: poly } });
         }
       }
-    } else {
-      results.push(feature);
-    }
-
+    } else { results.push(feature); }
     return results;
   }
 
-  // 切割跨日期变更线的多边形
-  // 返回一个数组，每个元素是一个 polygon（外环+内环的数组）
   _splitAntimeridianPolygon(polygon) {
-    // polygon = [outerRing, hole1, hole2, ...]
     const splitRings = [];
-    for (const ring of polygon) {
-      const split = this._splitAntimeridianRing(ring);
-      splitRings.push(split);
-    }
-
-    // 外环可能被拆分成多段，每段形成一个新多边形
+    for (const ring of polygon) { splitRings.push(this._splitAntimeridianRing(ring)); }
     const outerParts = splitRings[0];
     const holes = splitRings.slice(1);
-
     const result = [];
     for (const outer of outerParts) {
-      // 为每个外环找到包含的洞
       const myHoles = [];
       for (const holeParts of holes) {
         for (const hole of holeParts) {
-          if (hole.length > 0) {
-            const hcx = hole[0][0];
-            const ocx = outer[0][0];
-            // 简单地按经度范围判断
-            if (Math.abs(hcx - ocx) < 180) {
-              myHoles.push(hole);
-            }
+          if (hole.length > 0 && Math.abs(hole[0][0] - outer[0][0]) < 180) {
+            myHoles.push(hole);
           }
         }
       }
       result.push([outer, ...myHoles]);
     }
-
     return result.length > 0 ? result : [polygon];
   }
 
-  // 切割跨日期变更线的环
   _splitAntimeridianRing(ring) {
     const segments = [];
-    let currentSegment = [];
-
+    let current = [];
     for (let i = 0; i < ring.length; i++) {
       const [lng, lat] = ring[i];
-
-      if (currentSegment.length === 0) {
-        currentSegment.push([lng, lat]);
-        continue;
-      }
-
-      const prev = currentSegment[currentSegment.length - 1];
-      const prevLng = prev[0];
-      const delta = lng - prevLng;
-
-      // 如果经度跳跃超过 180°，说明跨了日期变更线
-      if (Math.abs(delta) > 180) {
-        // 结束当前段
-        if (currentSegment.length > 1) {
-          segments.push(currentSegment);
-        }
-        // 开始新段
-        currentSegment = [[lng, lat]];
-      } else {
-        currentSegment.push([lng, lat]);
-      }
+      if (current.length === 0) { current.push([lng, lat]); continue; }
+      const prev = current[current.length - 1];
+      if (Math.abs(lng - prev[0]) > 180) {
+        if (current.length > 1) segments.push(current);
+        current = [[lng, lat]];
+      } else { current.push([lng, lat]); }
     }
-
-    if (currentSegment.length > 1) {
-      segments.push(currentSegment);
-    }
-
-    // 确保每个段是闭合的
+    if (current.length > 1) segments.push(current);
     for (const seg of segments) {
       if (seg.length > 0) {
-        const first = seg[0];
-        const last = seg[seg.length - 1];
-        if (first[0] !== last[0] || first[1] !== last[1]) {
-          seg.push([first[0], first[1]]);
-        }
+        const first = seg[0], last = seg[seg.length - 1];
+        if (first[0] !== last[0] || first[1] !== last[1]) seg.push([first[0], first[1]]);
       }
     }
-
     return segments;
   }
 
@@ -408,295 +395,203 @@ export class MapLayer {
     this._renderFallback();
   }
 
-  // Canvas 2D 渲染地图
-  _renderFallback() {
-    if (!this.fallback) return;
-    const { ctx, countries, admin1, centerLng, centerLat, zoom } = this.fallback;
+  _getCanvasViewport() {
+    const { centerLng, centerLat, zoom } = this.fallback;
     const rect = this.fallback.canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
-
-    ctx.clearRect(0, 0, w, h);
-
-    // 像素比例：zoom 0 时世界宽 360 度 = 256px
+    const w = rect.width, h = rect.height;
     const pixelScale = 256 * Math.pow(2, zoom) / 360;
     const worldCenter = this._lngLatToWorld(centerLng, centerLat);
     const offsetX = w / 2 - worldCenter.x * pixelScale;
     const offsetY = h / 2 - worldCenter.y * pixelScale;
-
-    // 同步到 engine
-    this.engine.offsetX = offsetX;
-    this.engine.offsetY = offsetY;
-    this.engine.scale = pixelScale;
-
-    // 计算视口对应的经纬度范围（只渲染视口内的要素）
     const lngMin = this._worldToLngLat((0 - offsetX) / pixelScale, 0).lng;
     const lngMax = this._worldToLngLat((w - offsetX) / pixelScale, 0).lng;
     const latMax = this._worldToLngLat(0, (0 - offsetY) / pixelScale).lat;
     const latMin = this._worldToLngLat(0, (h - offsetY) / pixelScale).lat;
-    // 加一点 padding
-    const padLng = (lngMax - lngMin) * 0.1;
-    const padLat = (latMax - latMin) * 0.1;
+    return { lngMin, lngMax, latMin, latMax, offsetX, offsetY, pixelScale, w, h };
+  }
+
+  _renderFallback() {
+    if (!this.fallback) return;
+    const { ctx, countries, admin1 } = this.fallback;
+    const vp = this._getCanvasViewport();
+    const { offsetX, offsetY, pixelScale, w, h } = vp;
+    const padLng = (vp.lngMax - vp.lngMin) * 0.1;
+    const padLat = (vp.latMax - vp.latMin) * 0.1;
     const viewport = {
-      lngMin: lngMin - padLng, lngMax: lngMax + padLng,
-      latMin: latMin - padLat, latMax: latMax + padLat,
+      lngMin: vp.lngMin - padLng, lngMax: vp.lngMax + padLng,
+      latMin: vp.latMin - padLat, latMax: vp.latMax + padLat,
     };
 
-    // 1. 绘制国家填充
+    ctx.clearRect(0, 0, w, h);
+    this.engine.offsetX = offsetX;
+    this.engine.offsetY = offsetY;
+    this.engine.scale = pixelScale;
+
+    // 1. 国家填充
     ctx.fillStyle = '#f5f5f0';
-    for (const feature of countries.features) {
-      if (this._featureInViewport(feature, viewport)) {
-        this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, true);
-      }
+    for (const f of countries.features) {
+      if (this._featureInViewport(f, viewport)) this._drawFeature(ctx, f, offsetX, offsetY, pixelScale, true);
     }
 
-    // 2. 绘制行政区划边界（zoom >= 3 时才显示，渐进透明度）
-    if (admin1 && zoom >= this._admin1MinZoom) {
-      const adminOpacity = Math.min(0.7, (zoom - this._admin1MinZoom) * 0.3 + 0.3);
-      ctx.strokeStyle = `rgba(208, 208, 200, ${adminOpacity})`;
+    // 2. 行政区划边界
+    if (admin1 && admin1.features) {
+      ctx.strokeStyle = 'rgba(200, 200, 192, 0.6)';
       ctx.lineWidth = Math.max(0.3, pixelScale * 0.15);
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      for (const feature of admin1.features) {
-        if (this._featureInViewport(feature, viewport)) {
-          this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, false);
-        }
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      for (const f of admin1.features) {
+        if (this._featureInViewport(f, viewport)) this._drawFeature(ctx, f, offsetX, offsetY, pixelScale, false);
       }
     }
 
-    // 3. 绘制国家边界（较粗、较深）
-    ctx.strokeStyle = '#999999';
+    // 3. 国家边界
+    ctx.strokeStyle = '#999';
     ctx.lineWidth = Math.max(0.5, pixelScale * 0.4);
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    for (const feature of countries.features) {
-      if (this._featureInViewport(feature, viewport)) {
-        this._drawFeature(ctx, feature, offsetX, offsetY, pixelScale, false);
-      }
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (const f of countries.features) {
+      if (this._featureInViewport(f, viewport)) this._drawFeature(ctx, f, offsetX, offsetY, pixelScale, false);
     }
 
     this.engine.render();
     if (this.engine.onViewportChange) this.engine.onViewportChange();
   }
 
-  // 检查要素是否在视口范围内（快速 bounding box 测试）
-  _featureInViewport(feature, viewport) {
-    const bbox = feature.bbox || this._getFeatureBBox(feature);
-    if (!bbox) return true; // 无法确定边界时默认渲染
-    return !(bbox[0] > viewport.lngMax || bbox[2] < viewport.lngMin ||
-             bbox[1] > viewport.latMax || bbox[3] < viewport.latMin);
+  _featureInViewport(feature, vp) {
+    const bbox = feature._bbox || this._getFeatureBBox(feature);
+    if (!bbox) return true;
+    return !(bbox[0] > vp.lngMax || bbox[2] < vp.lngMin || bbox[1] > vp.latMax || bbox[3] < vp.latMin);
   }
 
-  // 获取要素的 bounding box（缓存）
   _getFeatureBBox(feature) {
     if (feature._bbox) return feature._bbox;
-    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-    const coords = feature.geometry.type === 'Polygon'
-      ? [feature.geometry.coordinates]
-      : feature.geometry.coordinates;
-    for (const polygon of coords) {
-      for (const ring of polygon) {
+    let mn = Infinity, mn2 = Infinity, mx = -Infinity, mx2 = -Infinity;
+    const coords = feature.geometry.type === 'Polygon' ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+    for (const poly of coords) {
+      for (const ring of poly) {
         for (const [lng, lat] of ring) {
-          if (lng < minLng) minLng = lng;
-          if (lng > maxLng) maxLng = lng;
-          if (lat < minLat) minLat = lat;
-          if (lat > maxLat) maxLat = lat;
+          if (lng < mn) mn = lng; if (lng > mx) mx = lng;
+          if (lat < mn2) mn2 = lat; if (lat > mx2) mx2 = lat;
         }
       }
     }
-    feature._bbox = [minLng, minLat, maxLng, maxLat];
+    feature._bbox = [mn, mn2, mx, mx2];
     return feature._bbox;
   }
 
   _drawFeature(ctx, feature, offsetX, offsetY, scale, fill) {
-    const geometry = feature.geometry;
-    if (!geometry) return;
-
-    const coords = geometry.type === 'Polygon'
-      ? [geometry.coordinates]
-      : geometry.coordinates;
-
-    for (const polygon of coords) {
-      for (const ring of polygon) {
+    const g = feature.geometry;
+    if (!g) return;
+    const coords = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+    for (const poly of coords) {
+      for (const ring of poly) {
         ctx.beginPath();
         for (let i = 0; i < ring.length; i++) {
           const [lng, lat] = ring[i];
           const world = this._lngLatToWorld(lng, lat);
           const sx = world.x * scale + offsetX;
           const sy = world.y * scale + offsetY;
-          if (i === 0) ctx.moveTo(sx, sy);
-          else ctx.lineTo(sx, sy);
+          if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
         }
         ctx.closePath();
-        if (fill) ctx.fill();
-        else ctx.stroke();
+        if (fill) ctx.fill(); else ctx.stroke();
       }
     }
   }
 
-  // 将视口同步到 CanvasEngine
   _syncToEngine() {
-    if (this._mode === 'maplibre' && this.map) {
-      this._syncMapLibreToEngine();
-    } else if (this._mode === 'canvas2d' && this.fallback) {
-      this._renderFallback();
-    }
+    if (this._mode === 'maplibre' && this.map) this._syncMapLibreToEngine();
+    else if (this._mode === 'canvas2d' && this.fallback) this._renderFallback();
   }
 
   _syncMapLibreToEngine() {
     if (!this.map || !this.engine) return;
-
-    const transform = this.map.getCenter();
+    const c = this.map.getCenter();
     const zoom = this.map.getZoom();
-    const centerLng = transform.lng;
-    const centerLat = transform.lat;
-
-    const worldCenter = this._lngLatToWorld(centerLng, centerLat);
-    // MapLibre GL JS 使用 512x512 瓦片，zoom 0 时世界宽 512px
+    const worldCenter = this._lngLatToWorld(c.lng, c.lat);
     const pixelScale = 512 * Math.pow(2, zoom) / 360;
-
     const rect = this.map.getContainer().getBoundingClientRect();
     this.engine.offsetX = rect.width / 2 - worldCenter.x * pixelScale;
     this.engine.offsetY = rect.height / 2 - worldCenter.y * pixelScale;
     this.engine.scale = pixelScale;
-
     this.engine.render();
     if (this.engine.onViewportChange) this.engine.onViewportChange();
   }
 
-  // 经纬度 -> 世界坐标（墨卡托投影，Y 轴向下与屏幕一致）
   _lngLatToWorld(lng, lat) {
-    const x = lng;
     const latRad = lat * Math.PI / 180;
-    const y = -180 / Math.PI * Math.log(Math.tan(Math.PI / 4 + latRad / 2));
-    return { x, y };
+    return { x: lng, y: -180 / Math.PI * Math.log(Math.tan(Math.PI / 4 + latRad / 2)) };
   }
 
-  // 世界坐标 -> 经纬度
   _worldToLngLat(x, y) {
-    const lng = x;
     const yRad = -y * Math.PI / 180;
-    const lat = 180 / Math.PI * (2 * Math.atan(Math.exp(yRad)) - Math.PI / 2);
-    return { lng, lat };
+    return { lng: x, lat: 180 / Math.PI * (2 * Math.atan(Math.exp(yRad)) - Math.PI / 2) };
   }
 
-  // 屏幕坐标 -> 经纬度
   screenToLngLat(sx, sy) {
-    if (this._mode === 'maplibre' && this.map) {
-      return this.map.unproject([sx, sy]);
-    }
+    if (this._mode === 'maplibre' && this.map) return this.map.unproject([sx, sy]);
     if (this._mode === 'canvas2d' && this.fallback) {
-      const wx = (sx - this.engine.offsetX) / this.engine.scale;
-      const wy = (sy - this.engine.offsetY) / this.engine.scale;
-      return this._worldToLngLat(wx, wy);
+      return this._worldToLngLat((sx - this.engine.offsetX) / this.engine.scale, (sy - this.engine.offsetY) / this.engine.scale);
     }
     return null;
   }
 
-  // 经纬度 -> 屏幕坐标
   lngLatToScreen(lng, lat) {
-    if (this._mode === 'maplibre' && this.map) {
-      return this.map.project([lng, lat]);
-    }
+    if (this._mode === 'maplibre' && this.map) return this.map.project([lng, lat]);
     if (this._mode === 'canvas2d' && this.fallback) {
-      const world = this._lngLatToWorld(lng, lat);
-      return {
-        x: world.x * this.engine.scale + this.engine.offsetX,
-        y: world.y * this.engine.scale + this.engine.offsetY,
-      };
+      const w = this._lngLatToWorld(lng, lat);
+      return { x: w.x * this.engine.scale + this.engine.offsetX, y: w.y * this.engine.scale + this.engine.offsetY };
     }
     return null;
   }
 
-  // 设置视口（CanvasEngine 平移/缩放时调用）
   setViewport(centerLng, centerLat, zoom) {
     if (this._mode === 'maplibre' && this.map) {
       this.map.jumpTo({ center: [centerLng, centerLat], zoom });
+      this._scheduleTileUpdate();
     } else if (this._mode === 'canvas2d' && this.fallback) {
       this.fallback.centerLng = centerLng;
       this.fallback.centerLat = centerLat;
       this.fallback.zoom = zoom;
       this._renderFallback();
+      this._scheduleTileUpdate();
     }
   }
 
-  // Canvas 2D 模式：通过像素增量平移地图
   panByPixels(dx, dy) {
     if (this._mode !== 'canvas2d' || !this.fallback) return;
-    const pixelScale = 256 * Math.pow(2, this.fallback.zoom) / 360;
-    // 像素增量 -> 经纬度增量
-    const dLng = -dx / pixelScale;
-    // 纬度增量需要考虑墨卡托投影的非线性
-    const centerWorld = this._lngLatToWorld(this.fallback.centerLng, this.fallback.centerLat);
-    const newCenterWorldY = centerWorld.y - dy / pixelScale;
-    const newCenter = this._worldToLngLat(centerWorld.x + dLng, newCenterWorldY);
-    this.fallback.centerLng = newCenter.lng;
-    this.fallback.centerLat = newCenter.lat;
+    const ps = 256 * Math.pow(2, this.fallback.zoom) / 360;
+    const dLng = -dx / ps;
+    const cw = this._lngLatToWorld(this.fallback.centerLng, this.fallback.centerLat);
+    const nc = this._worldToLngLat(cw.x + dLng, cw.y - dy / ps);
+    this.fallback.centerLng = nc.lng;
+    this.fallback.centerLat = nc.lat;
     this._renderFallback();
+    this._scheduleTileUpdate();
   }
 
-  // Canvas 2D 模式：以屏幕坐标为中心缩放
   zoomAt(screenX, screenY, newZoom) {
     if (this._mode !== 'canvas2d' || !this.fallback) return;
-    const clampedZoom = Math.max(this._minZoom, Math.min(this._maxZoom, newZoom));
-    // 缩放前鼠标位置对应的经纬度
+    const cz = Math.max(this._minZoom, Math.min(this._maxZoom, newZoom));
     const before = this.screenToLngLat(screenX, screenY);
     if (!before) return;
-    this.fallback.zoom = clampedZoom;
-    // 缩放后该经纬度对应的屏幕位置
+    this.fallback.zoom = cz;
     const after = this.lngLatToScreen(before.lng, before.lat);
     if (!after) return;
-    // 调整中心使鼠标位置保持不变
-    const dx = after.x - screenX;
-    const dy = after.y - screenY;
-    this.panByPixels(dx, dy);
+    this.panByPixels(after.x - screenX, after.y - screenY);
   }
 
-  // 获取导出用 canvas
   getCanvas() {
-    if (this._mode === 'maplibre' && this.map) {
-      return this.map.getCanvas();
-    }
-    if (this._mode === 'canvas2d' && this.fallback) {
-      return this.fallback.canvas;
-    }
+    if (this._mode === 'maplibre' && this.map) return this.map.getCanvas();
+    if (this._mode === 'canvas2d' && this.fallback) return this.fallback.canvas;
     return null;
   }
 
-  // 获取当前模式
-  getMode() {
-    return this._mode;
-  }
+  getMode() { return this._mode; }
 
-  // 销毁
   destroy() {
-    if (this.map) {
-      this.map.remove();
-      this.map = null;
-    }
-    if (this._resizeHandler) {
-      window.removeEventListener('resize', this._resizeHandler);
-    }
-    const mapDiv = document.getElementById('map-container');
-    if (mapDiv) mapDiv.remove();
-    const mapCanvas = document.getElementById('map-canvas-2d');
-    if (mapCanvas) mapCanvas.remove();
-    this.fallback = null;
-    this._mode = 'none';
-  }
-
-  // 回退样式（当 style.json 加载失败时使用）
-  _getFallbackStyle() {
-    return {
-      version: 8,
-      sources: {},
-      layers: [
-        {
-          id: 'background',
-          type: 'background',
-          paint: { 'background-color': '#ffffff' }
-        }
-      ]
-    };
+    if (this.map) { this.map.remove(); this.map = null; }
+    if (this._resizeHandler) window.removeEventListener('resize', this._resizeHandler);
+    const d = document.getElementById('map-container'); if (d) d.remove();
+    const c = document.getElementById('map-canvas-2d'); if (c) c.remove();
+    this.fallback = null; this._mode = 'none';
   }
 }
