@@ -1,10 +1,9 @@
 // ============================================
-// map-layer.js - 地图背景层（分区块加载版）
+// map-layer.js - 地图背景层（分区块加载版 v2）
 // ============================================
-// 高精度地图数据按 20°×20° 网格分块
-// 只加载视口可见范围内的区块，降低服务器压力
-// 国家边界一次性加载（低精度概览）
-// 行政区划按需分块加载（高精度 GeoBoundaries）
+// 国家边界和行政区划都按 20°×20° 区块从 CDN 加载
+// 初始加载低精度国家填充（快速显示）
+// 区块加载后替换为高精度边界（tol=0.005, ~500m）
 // ============================================
 
 export class MapLayer {
@@ -17,32 +16,26 @@ export class MapLayer {
     this._initialized = false;
     this._mode = 'none';
     this._maxZoom = 10;
-    this._minZoom = 3;        // 大幅提高最小缩放：不允许看到大洲全貌
-    this._tileSize = 20;      // 区块大小（度）
-    this._loadedTiles = new Map();    // tileId -> features[]
-    this._loadingTiles = new Set();   // 正在加载的区块
-    this._tileUpdateTimer = null;     // 防抖计时器
-    this._manifest = null;
-    this._tileBaseURL = 'https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data/tiles';
-    this._cdnBase = 'https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data';
+    this._minZoom = 3;
+    this._tileSize = 20;
+    this._loadedTiles = new Map();    // tileId -> {admin1: [], countries: []}
+    this._loadingTiles = new Set();
+    this._tileUpdateTimer = null;
+    this._cdnVersion = '20260711f';   // 缓存破坏版本号
+    this._cdnBase = `https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data`;
   }
 
   async init() {
     const webglAvailable = this._checkWebGL();
     if (webglAvailable) {
-      try {
-        await this._initMapLibre();
-        return;
-      } catch (err) {
-        console.warn('[MapLayer] MapLibre 失败，回退 Canvas 2D:', err.message);
-      }
+      try { await this._initMapLibre(); return; }
+      catch (err) { console.warn('[MapLayer] MapLibre 失败:', err.message); }
     } else {
       console.warn('[MapLayer] WebGL 不可用，使用 Canvas 2D');
     }
-    try {
-      await this._initCanvas2D();
-    } catch (err) {
-      console.warn('[MapLayer] Canvas 2D 也失败:', err);
+    try { await this._initCanvas2D(); }
+    catch (err) {
+      console.warn('[MapLayer] Canvas 2D 失败:', err);
       this.container.style.background = '#ffffff';
       this._mode = 'none';
     }
@@ -57,12 +50,13 @@ export class MapLayer {
 
   // ===== 区块加载核心逻辑 =====
 
-  // 计算视口可见的区块 ID 列表（含一圈缓冲区）
-  // 网格对齐：纬度从-90开始，经度从-180开始，步长20°
+  _tileURL(tileId, layer) {
+    return `${this._cdnBase}/tiles/${tileId}/${layer}.geojson?v=${this._cdnVersion}`;
+  }
+
   _getVisibleTileIds(lngMin, latMin, lngMax, latMax) {
     const ts = this._tileSize;
-    const buf = ts; // 一圈缓冲
-    // 对齐到网格起点（纬度-90，经度-180）
+    const buf = ts;
     const startLng = Math.floor((lngMin - buf + 180) / ts) * ts - 180;
     const endLng = Math.ceil((lngMax + buf + 180) / ts) * ts - 180;
     const startLat = Math.floor((latMin - buf + 90) / ts) * ts - 90;
@@ -76,13 +70,11 @@ export class MapLayer {
     return ids;
   }
 
-  // 防抖更新区块
   _scheduleTileUpdate() {
     if (this._tileUpdateTimer) clearTimeout(this._tileUpdateTimer);
     this._tileUpdateTimer = setTimeout(() => this._updateTiles(), 200);
   }
 
-  // 加载新区块、卸载远离的区块
   async _updateTiles() {
     if (!this._initialized) return;
 
@@ -95,18 +87,15 @@ export class MapLayer {
       const vp = this._getCanvasViewport();
       lngMin = vp.lngMin; lngMax = vp.lngMax;
       latMin = vp.latMin; latMax = vp.latMax;
-    } else {
-      return;
-    }
+    } else return;
 
     const visibleIds = new Set(this._getVisibleTileIds(lngMin, latMin, lngMax, latMax));
 
-    // 卸载不可见的区块（保留两圈缓冲内的）
+    // 卸载远离的区块
     const unloadBuffer = this._tileSize * 2;
     for (const [tileId] of this._loadedTiles) {
       if (!visibleIds.has(tileId)) {
         const [tlng, tlat] = tileId.split('_').map(Number);
-        // 只卸载远离视口的区块
         if (tlng < lngMin - unloadBuffer || tlng > lngMax + unloadBuffer ||
             tlat < latMin - unloadBuffer || tlat > latMax + unloadBuffer) {
           this._loadedTiles.delete(tileId);
@@ -122,13 +111,10 @@ export class MapLayer {
       }
     }
 
-    // 限制并发加载数量
-    const MAX_CONCURRENT = 4;
-    const batch = toLoad.slice(0, MAX_CONCURRENT);
-    for (const id of batch) {
+    const MAX_CONCURRENT = 6;
+    for (const id of toLoad.slice(0, MAX_CONCURRENT)) {
       this._loadTile(id);
     }
-    // 剩余的稍后加载
     if (toLoad.length > MAX_CONCURRENT) {
       setTimeout(() => {
         for (const id of toLoad.slice(MAX_CONCURRENT)) {
@@ -138,8 +124,6 @@ export class MapLayer {
         }
       }, 500);
     }
-
-    this._refreshAdmin1Data();
   }
 
   async _loadTile(tileId) {
@@ -147,52 +131,65 @@ export class MapLayer {
     this._loadingTiles.add(tileId);
 
     try {
-      const resp = await fetch(`${this._tileBaseURL}/${tileId}/admin1.geojson`);
-      if (!resp.ok) {
-        console.warn('[MapLayer] Tile not found:', tileId, resp.status);
-        this._loadingTiles.delete(tileId);
-        return;
+      // 同时加载 admin1 和 countries
+      const [admin1Resp, countriesResp] = await Promise.allSettled([
+        fetch(this._tileURL(tileId, 'admin1')),
+        fetch(this._tileURL(tileId, 'countries')),
+      ]);
+
+      const tileData = { admin1: [], countries: [] };
+
+      if (admin1Resp.status === 'fulfilled' && admin1Resp.value.ok) {
+        const data = await admin1Resp.value.json();
+        if (data.features?.length) {
+          tileData.admin1 = this._preprocessGeoJSON(data).features;
+        }
       }
-      const data = await resp.json();
-      const features = data.features || [];
-      console.log('[MapLayer] Tile loaded:', tileId, features.length, 'features');
-      if (features.length > 0) {
-        const processed = this._preprocessGeoJSON({ features });
-        this._loadedTiles.set(tileId, processed.features);
-      } else {
-        this._loadedTiles.set(tileId, []);
+
+      if (countriesResp.status === 'fulfilled' && countriesResp.value.ok) {
+        const data = await countriesResp.value.json();
+        if (data.features?.length) {
+          tileData.countries = this._preprocessGeoJSON(data).features;
+        }
       }
-      this._refreshAdmin1Data();
+
+      this._loadedTiles.set(tileId, tileData);
+      console.log(`[MapLayer] Tile ${tileId}: ${tileData.admin1.length} admin1, ${tileData.countries.length} countries`);
+      this._refreshTileData();
     } catch (e) {
-      console.error('[MapLayer] Tile load error:', tileId, e.message);
+      console.error('[MapLayer] Tile error:', tileId, e.message);
+      this._loadedTiles.set(tileId, { admin1: [], countries: [] });
     } finally {
       this._loadingTiles.delete(tileId);
     }
   }
 
-  // 将所有已加载区块的数据合并，更新到地图/画布
-  _refreshAdmin1Data() {
-    const allFeatures = [];
-    const seen = new Set();
-    for (const [, feats] of this._loadedTiles) {
-      for (const f of feats) {
-        // 去重（同一要素可能出现在多个区块中）
-        const key = (f.properties?.name || '') + '_' + (f.properties?.country || '') +
-          '_' + (f.geometry?.coordinates?.[0]?.[0]?.[0] || '');
-        if (!seen.has(key)) {
-          seen.add(key);
-          allFeatures.push(f);
-        }
+  // 合并所有已加载区块的数据，更新地图
+  _refreshTileData() {
+    const allAdmin1 = [];
+    const allCountries = [];
+    const seenA = new Set();
+    const seenC = new Set();
+
+    for (const [, td] of this._loadedTiles) {
+      for (const f of td.admin1) {
+        const key = (f.properties?.name || '') + JSON.stringify(f.geometry?.coordinates?.[0]?.[0]?.[0] || '');
+        if (!seenA.has(key)) { seenA.add(key); allAdmin1.push(f); }
+      }
+      for (const f of td.countries) {
+        const key = (f.properties?.name || '') + JSON.stringify(f.geometry?.coordinates?.[0]?.[0]?.[0] || '');
+        if (!seenC.has(key)) { seenC.add(key); allCountries.push(f); }
       }
     }
 
     if (this._mode === 'maplibre' && this.map) {
-      const src = this.map.getSource('admin1');
-      if (src) {
-        src.setData({ type: 'FeatureCollection', features: allFeatures });
-      }
+      const aSrc = this.map.getSource('admin1');
+      const cSrc = this.map.getSource('countries-tile');
+      if (aSrc) aSrc.setData({ type: 'FeatureCollection', features: allAdmin1 });
+      if (cSrc) cSrc.setData({ type: 'FeatureCollection', features: allCountries });
     } else if (this._mode === 'canvas2d' && this.fallback) {
-      this.fallback.admin1 = { type: 'FeatureCollection', features: allFeatures };
+      this.fallback.admin1 = { type: 'FeatureCollection', features: allAdmin1 };
+      this.fallback.countriesTile = { type: 'FeatureCollection', features: allCountries };
       this._renderFallback();
     }
   }
@@ -224,13 +221,9 @@ export class MapLayer {
     mainCanvas.style.zIndex = '1';
     mainCanvas.style.background = 'transparent';
 
-    // 从 CDN 加载国家边界（完整精度，3.5MB，146K顶点）
-    const countryData = await this._loadGeoJSON(`${this._cdnBase}/countries.geojson`).catch(() => {
-      // CDN 失败时回退到服务器
-      return this._loadGeoJSON('/map-data/countries.geojson').catch(() => null);
-    });
+    // 初始低精度国家数据（仅用于快速填充显示）
+    const countryData = await this._loadGeoJSON(`${this._cdnBase}/countries.geojson?v=${this._cdnVersion}`).catch(() => null);
     const processedCountries = countryData ? this._preprocessGeoJSON(countryData) : null;
-    console.log('[MapLayer] Countries loaded:', processedCountries?.features?.length || 0, 'features');
 
     const style = {
       version: 8, sources: {},
@@ -247,25 +240,28 @@ export class MapLayer {
     });
 
     this.map.on('load', () => {
-      // 国家填充和边界
+      // 初始低精度国家填充（快速显示）
       if (processedCountries) {
         this.map.addSource('countries', { type: 'geojson', data: processedCountries });
         this.map.addLayer({
           id: 'country-fill', type: 'fill', source: 'countries',
           paint: { 'fill-color': '#f5f5f0', 'fill-opacity': 1 },
         });
-        this.map.addLayer({
-          id: 'country-borders', type: 'line', source: 'countries',
-          paint: {
-            'line-color': '#999',
-            'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 5, 1.2, 7, 2.0, 10, 3.0],
-            'line-opacity': 0.8,
-          },
-          layout: { 'line-join': 'round', 'line-cap': 'round' },
-        });
       }
 
-      // 行政区划（空数据源，按区块动态填充）
+      // 高精度国家边界（从区块加载，初始为空）
+      this.map.addSource('countries-tile', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      this.map.addLayer({
+        id: 'country-borders-hp', type: 'line', source: 'countries-tile',
+        paint: {
+          'line-color': '#888',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 5, 1.2, 7, 2.0, 10, 3.0],
+          'line-opacity': 0.85,
+        },
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+      });
+
+      // 行政区划边界
       this.map.addSource('admin1', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       this.map.addLayer({
         id: 'admin1-borders', type: 'line', source: 'admin1',
@@ -290,13 +286,10 @@ export class MapLayer {
   // ===== Canvas 2D 回退模式 =====
 
   async _initCanvas2D() {
-    // 从 CDN 加载国家边界
-    const countryData = await this._loadGeoJSON(`${this._cdnBase}/countries.geojson`).catch(() => {
-      return this._loadGeoJSON('/map-data/countries.geojson').catch(() => null);
-    });
-    if (!countryData) throw new Error('无法加载国家数据');
-    const processedCountries = this._preprocessGeoJSON(countryData);
-    console.log('[MapLayer] Canvas2D countries:', processedCountries.features.length, 'features');
+    // 初始低精度国家数据（快速显示填充）
+    const countryData = await this._loadGeoJSON(`${this._cdnBase}/countries.geojson?v=${this._cdnVersion}`).catch(() => null);
+    const processedCountries = countryData ? this._preprocessGeoJSON(countryData) : { type: 'FeatureCollection', features: [] };
+    console.log('[MapLayer] Initial countries:', processedCountries.features.length, 'features');
 
     const mapCanvas = document.createElement('canvas');
     mapCanvas.id = 'map-canvas-2d';
@@ -308,7 +301,8 @@ export class MapLayer {
 
     this.fallback = {
       canvas: mapCanvas, ctx: mapCanvas.getContext('2d'),
-      countries: processedCountries,
+      countries: processedCountries,        // 低精度初始数据（仅填充）
+      countriesTile: { type: 'FeatureCollection', features: [] }, // 高精度区块数据
       admin1: { type: 'FeatureCollection', features: [] },
       centerLng: 0, centerLat: 30, zoom: 3.5,
     };
@@ -329,7 +323,6 @@ export class MapLayer {
     return await resp.json();
   }
 
-  // 预处理 GeoJSON：切割跨日期变更线的多边形
   _preprocessGeoJSON(geoData) {
     const result = { type: 'FeatureCollection', features: [] };
     for (const feature of geoData.features) {
@@ -429,7 +422,7 @@ export class MapLayer {
 
   _renderFallback() {
     if (!this.fallback) return;
-    const { ctx, countries, admin1 } = this.fallback;
+    const { ctx, countries, countriesTile, admin1 } = this.fallback;
     const vp = this._getCanvasViewport();
     const { offsetX, offsetY, pixelScale, w, h } = vp;
     const padLng = (vp.lngMax - vp.lngMin) * 0.1;
@@ -444,14 +437,14 @@ export class MapLayer {
     this.engine.offsetY = offsetY;
     this.engine.scale = pixelScale;
 
-    // 1. 国家填充
+    // 1. 国家填充（用初始低精度数据）
     ctx.fillStyle = '#f5f5f0';
     for (const f of countries.features) {
       if (this._featureInViewport(f, viewport)) this._drawFeature(ctx, f, offsetX, offsetY, pixelScale, true);
     }
 
-    // 2. 行政区划边界
-    if (admin1 && admin1.features) {
+    // 2. 行政区划边界（从区块加载）
+    if (admin1?.features) {
       ctx.strokeStyle = 'rgba(200, 200, 192, 0.6)';
       ctx.lineWidth = Math.max(0.3, pixelScale * 0.15);
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -460,11 +453,12 @@ export class MapLayer {
       }
     }
 
-    // 3. 国家边界
-    ctx.strokeStyle = '#999';
+    // 3. 国家边界（优先用高精度区块数据，回退到初始数据）
+    const borderSource = (countriesTile?.features?.length > 0) ? countriesTile : countries;
+    ctx.strokeStyle = '#888';
     ctx.lineWidth = Math.max(0.5, pixelScale * 0.4);
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    for (const f of countries.features) {
+    for (const f of borderSource.features) {
       if (this._featureInViewport(f, viewport)) this._drawFeature(ctx, f, offsetX, offsetY, pixelScale, false);
     }
 
@@ -481,7 +475,7 @@ export class MapLayer {
   _getFeatureBBox(feature) {
     if (feature._bbox) return feature._bbox;
     let mn = Infinity, mn2 = Infinity, mx = -Infinity, mx2 = -Infinity;
-    const coords = feature.geometry.type === 'Polygon' ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+    const coords = feature.geometry?.type === 'Polygon' ? [feature.geometry.coordinates] : feature.geometry?.coordinates || [];
     for (const poly of coords) {
       for (const ring of poly) {
         for (const [lng, lat] of ring) {
