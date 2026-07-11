@@ -540,10 +540,11 @@ export class CanvasEngine {
     const points = this.currentStroke.points;
     const last = points[points.length - 1];
 
-    // 最小距离过滤（减少抖动）
+    // 最小距离过滤（减少抖动），阈值按 scale 换算为世界坐标
+    const minDist = 2 / Math.max(this.scale, 0.1); // 2 屏幕像素
     const dx = worldX - last[0];
     const dy = worldY - last[1];
-    if (dx * dx + dy * dy < 1) return;
+    if (dx * dx + dy * dy < minDist * minDist) return;
 
     points.push([worldX, worldY]);
     this.render();
@@ -551,7 +552,7 @@ export class CanvasEngine {
 
   _endDrawing() {
     this.isDrawing = false;
-    if (this.currentStroke && this.currentStroke.points.length > 1) {
+    if (this.currentStroke && this.currentStroke.points.length >= 1) {
       if (this.onStrokeEnd) {
         this.onStrokeEnd(this.currentStroke);
       }
