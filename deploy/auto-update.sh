@@ -101,14 +101,14 @@ for file in "${FRONTEND_FILES[@]}"; do
     target="$PUBLIC_DIR/$filename"
   fi
   
-  curl -sL --max-time 120 "$url" > "$target.tmp" 2>/dev/null
-  if [ -s "$target.tmp" ]; then
+  curl -sfL --max-time 120 "$url" > "$target.tmp" 2>/dev/null
+  if [ $? -eq 0 ] && [ -s "$target.tmp" ]; then
     mv "$target.tmp" "$target"
     log "  更新: $file -> $target"
     UPDATED=$((UPDATED + 1))
   else
     rm -f "$target.tmp"
-    log "  WARN: 下载失败 $file"
+    log "  WARN: 下载失败或截断 $file"
   fi
 done
 

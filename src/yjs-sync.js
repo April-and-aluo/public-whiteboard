@@ -8,8 +8,8 @@
 // 通过配置 WS_URL 切换
 // ============================================
 
-import * as Y from './yjs-bundle.js?v=20260710i';
-import { WebsocketProvider, WebrtcProvider } from './yjs-bundle.js?v=20260710i';
+import * as Y from './yjs-bundle.js?v=20260711a';
+import { WebsocketProvider, WebrtcProvider } from './yjs-bundle.js?v=20260711a';
 
 // ============================================
 // 配置区
