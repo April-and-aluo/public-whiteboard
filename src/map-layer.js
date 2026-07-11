@@ -23,6 +23,7 @@ export class MapLayer {
     this._loadingTiles = new Set();   // 正在加载的区块
     this._tileUpdateTimer = null;     // 防抖计时器
     this._manifest = null;
+    this._tileBaseURL = 'https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data/tiles';
   }
 
   async init() {
@@ -143,7 +144,7 @@ export class MapLayer {
     this._loadingTiles.add(tileId);
 
     try {
-      const resp = await fetch(`/map-data/tiles/${tileId}/admin1.geojson`);
+      const resp = await fetch(`${this._tileBaseURL}/${tileId}/admin1.geojson`);
       if (!resp.ok) { this._loadingTiles.delete(tileId); return; }
       const data = await resp.json();
       const features = data.features || [];
