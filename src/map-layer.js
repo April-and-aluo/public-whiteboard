@@ -58,13 +58,15 @@ export class MapLayer {
   // ===== 区块加载核心逻辑 =====
 
   // 计算视口可见的区块 ID 列表（含一圈缓冲区）
+  // 网格对齐：纬度从-90开始，经度从-180开始，步长20°
   _getVisibleTileIds(lngMin, latMin, lngMax, latMax) {
     const ts = this._tileSize;
     const buf = ts; // 一圈缓冲
-    const startLng = Math.floor((lngMin - buf) / ts) * ts;
-    const endLng = Math.ceil((lngMax + buf) / ts) * ts;
-    const startLat = Math.floor((latMin - buf) / ts) * ts;
-    const endLat = Math.ceil((latMax + buf) / ts) * ts;
+    // 对齐到网格起点（纬度-90，经度-180）
+    const startLng = Math.floor((lngMin - buf + 180) / ts) * ts - 180;
+    const endLng = Math.ceil((lngMax + buf + 180) / ts) * ts - 180;
+    const startLat = Math.floor((latMin - buf + 90) / ts) * ts - 90;
+    const endLat = Math.ceil((latMax + buf + 90) / ts) * ts - 90;
     const ids = [];
     for (let lat = startLat; lat < endLat; lat += ts) {
       for (let lng = startLng; lng < endLng; lng += ts) {
