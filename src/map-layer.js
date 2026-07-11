@@ -24,6 +24,7 @@ export class MapLayer {
     this._tileUpdateTimer = null;     // 防抖计时器
     this._manifest = null;
     this._tileBaseURL = 'https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data/tiles';
+    this._cdnBase = 'https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data';
   }
 
   async init() {
@@ -145,11 +146,15 @@ export class MapLayer {
 
     try {
       const resp = await fetch(`${this._tileBaseURL}/${tileId}/admin1.geojson`);
-      if (!resp.ok) { this._loadingTiles.delete(tileId); return; }
+      if (!resp.ok) {
+        console.warn('[MapLayer] Tile not found:', tileId, resp.status);
+        this._loadingTiles.delete(tileId);
+        return;
+      }
       const data = await resp.json();
       const features = data.features || [];
+      console.log('[MapLayer] Tile loaded:', tileId, features.length, 'features');
       if (features.length > 0) {
-        // 预处理日期变更线
         const processed = this._preprocessGeoJSON({ features });
         this._loadedTiles.set(tileId, processed.features);
       } else {
@@ -157,7 +162,7 @@ export class MapLayer {
       }
       this._refreshAdmin1Data();
     } catch (e) {
-      // 区块不存在或加载失败，静默跳过
+      console.error('[MapLayer] Tile load error:', tileId, e.message);
     } finally {
       this._loadingTiles.delete(tileId);
     }
@@ -217,9 +222,13 @@ export class MapLayer {
     mainCanvas.style.zIndex = '1';
     mainCanvas.style.background = 'transparent';
 
-    // 只加载国家边界（低精度概览，1.8MB）
-    const countryData = await this._loadGeoJSON('/map-data/countries.geojson').catch(() => null);
+    // 从 CDN 加载国家边界（完整精度，3.5MB，146K顶点）
+    const countryData = await this._loadGeoJSON(`${this._cdnBase}/countries.geojson`).catch(() => {
+      // CDN 失败时回退到服务器
+      return this._loadGeoJSON('/map-data/countries.geojson').catch(() => null);
+    });
     const processedCountries = countryData ? this._preprocessGeoJSON(countryData) : null;
+    console.log('[MapLayer] Countries loaded:', processedCountries?.features?.length || 0, 'features');
 
     const style = {
       version: 8, sources: {},
@@ -279,8 +288,13 @@ export class MapLayer {
   // ===== Canvas 2D 回退模式 =====
 
   async _initCanvas2D() {
-    const countryData = await this._loadGeoJSON('/map-data/countries.geojson');
+    // 从 CDN 加载国家边界
+    const countryData = await this._loadGeoJSON(`${this._cdnBase}/countries.geojson`).catch(() => {
+      return this._loadGeoJSON('/map-data/countries.geojson').catch(() => null);
+    });
+    if (!countryData) throw new Error('无法加载国家数据');
     const processedCountries = this._preprocessGeoJSON(countryData);
+    console.log('[MapLayer] Canvas2D countries:', processedCountries.features.length, 'features');
 
     const mapCanvas = document.createElement('canvas');
     mapCanvas.id = 'map-canvas-2d';
