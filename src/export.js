@@ -52,6 +52,10 @@ export class ExportManager {
     ctx.translate(-bounds.minX * exportScale, -bounds.minY * exportScale);
     ctx.scale(exportScale, exportScale);
 
+    // 导出时不需要视口缩放补偿，临时设为 1
+    const savedScale = this.engine.scale;
+    this.engine.scale = 1;
+
     // 绘制图片
     for (const img of images) {
       let imageObj = this.engine.imageCache.get(img.id);
@@ -69,6 +73,9 @@ export class ExportManager {
     for (const t of texts) {
       this.engine._drawText(ctx, t);
     }
+
+    // 恢复视口缩放
+    this.engine.scale = savedScale;
 
     // 绘制笔画
     for (const s of strokes) {

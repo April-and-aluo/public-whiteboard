@@ -2,10 +2,10 @@
 // main.js - 应用入口，协调各模块初始化
 // ============================================
 
-import { CanvasEngine } from './canvas-engine.js?v=20260711m';
-import { CursorLayer } from './cursor-layer.js?v=20260711m';
-import { ExportManager } from './export.js?v=20260711m';
-import { yjsSync } from './yjs-sync.js?v=20260711m';
+import { CanvasEngine } from './canvas-engine.js?v=20260711n';
+import { CursorLayer } from './cursor-layer.js?v=20260711n';
+import { ExportManager } from './export.js?v=20260711n';
+import { yjsSync } from './yjs-sync.js?v=20260711n';
 
 // MapLayer 按需加载（仅地图模式）
 
@@ -19,7 +19,7 @@ let currentTool = 'pen';
 let currentColor = '#1e3a5f';
 let currentWidth = 4;
 let pendingImageFile = null;
-let pendingImageProps = { scale: 2, rotation: 0, opacity: 1 };
+let pendingImageProps = { scale: 1, rotation: 0, opacity: 1 };
 let selectedImageId = null;
 let selectedTextId = null;
 let selectedType = null; // 'image' | 'text'
@@ -331,7 +331,7 @@ function showModeSelect(userName) {
 
 async function initMapLayer() {
   try {
-    const { MapLayer } = await import('./map-layer.js?v=20260711m');
+    const { MapLayer } = await import('./map-layer.js?v=20260711n');
     const app = document.getElementById('app');
     mapLayer = new MapLayer(app, engine);
     await mapLayer.init();
@@ -434,7 +434,7 @@ function startApp(userName, mode = 'free') {
     const screen = engine.worldToScreen(worldX, worldY);
     // 立即在 Yjs 中创建空文字元素，用户输入实时更新到画布
     const textId = yjsSync.addText(
-      worldX, worldY, '', 24, '#422006', 0, 1, 2
+      worldX, worldY, '', 24, '#422006', 0, 1, 1
     );
     pendingTextPos = { worldX, worldY, screenX: screen.x, screenY: screen.y };
     editingTextId = textId;
@@ -913,7 +913,7 @@ function handleImageUpload(file) {
       setTool('image');
       document.getElementById('image-placement').classList.remove('hidden');
       // 重置属性并显示调节面板
-      pendingImageProps = { scale: 2, rotation: 0, opacity: 1 };
+      pendingImageProps = { scale: 1, rotation: 0, opacity: 1 };
       showImagePropsPanel(null);
     };
     img.onerror = () => {
@@ -931,8 +931,8 @@ function handleImageUpload(file) {
 
 function hitTestImage(worldX, worldY, img) {
   const scale = img.scale !== undefined ? img.scale : 1;
-  const dw = img.w * scale;
-  const dh = img.h * scale;
+  const dw = img.w * scale / engine.scale;
+  const dh = img.h * scale / engine.scale;
   const cx = img.x + img.w / 2;
   const cy = img.y + img.h / 2;
   const rotation = (img.rotation || 0) * Math.PI / 180;
@@ -1010,10 +1010,10 @@ function showImagePropsPanel(img, text) {
   } else {
     // 放置新图片时（无信息）
     title.textContent = '图片属性';
-    scaleSlider.value = 200;
+    scaleSlider.value = 100;
     rotationSlider.value = 0;
     opacitySlider.value = 100;
-    scaleValue.textContent = '200%';
+    scaleValue.textContent = '100%';
     rotationValue.textContent = '0°';
     opacityValue.textContent = '100%';
     infoDiv.classList.add('hidden');

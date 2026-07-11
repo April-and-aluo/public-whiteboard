@@ -624,8 +624,8 @@ export class CanvasEngine {
     if (this.selectedImage) {
       const img = this.selectedImage;
       const scale = img.scale !== undefined ? img.scale : 1;
-      const dw = img.w * scale;
-      const dh = img.h * scale;
+      const dw = img.w * scale / this.scale;
+      const dh = img.h * scale / this.scale;
       const cx = img.x + img.w / 2;
       const cy = img.y + img.h / 2;
       const rotation = (img.rotation || 0) * Math.PI / 180;
@@ -717,8 +717,8 @@ export class CanvasEngine {
     if (this.selectedImage) {
       const img = this.selectedImage;
       const scale = img.scale !== undefined ? img.scale : 1;
-      const dw = img.w * scale;
-      const dh = img.h * scale;
+      const dw = img.w * scale / this.scale;
+      const dh = img.h * scale / this.scale;
       const cx = img.x + img.w / 2;
       const cy = img.y + img.h / 2;
       const rotation = (img.rotation || 0) * Math.PI / 180;
@@ -830,8 +830,8 @@ export class CanvasEngine {
       // 使用缓存的世界坐标进行命中检测
       const img = this.selectedImage;
       const scale = img.scale !== undefined ? img.scale : 1;
-      const dw = img.w * scale;
-      const dh = img.h * scale;
+      const dw = img.w * scale / this.scale;
+      const dh = img.h * scale / this.scale;
       const cx = img.x + img.w / 2;
       const cy = img.y + img.h / 2;
       const rotation = (img.rotation || 0) * Math.PI / 180;
@@ -939,12 +939,13 @@ export class CanvasEngine {
   }
 
   // 绘制图片（支持旋转、透明度、缩放）
+  // 注意：dw/dh 除以 this.scale，抵消 ctx.scale 变换，保持屏幕像素大小恒定
   _drawImage(ctx, img) {
     const rotation = img.rotation || 0;
     const opacity = img.opacity !== undefined ? img.opacity : 1;
     const scale = img.scale !== undefined ? img.scale : 1;
-    const dw = img.w * scale;
-    const dh = img.h * scale;
+    const dw = img.w * scale / this.scale;
+    const dh = img.h * scale / this.scale;
     const cx = img.x + img.w / 2;
     const cy = img.y + img.h / 2;
 
@@ -981,11 +982,12 @@ export class CanvasEngine {
   }
 
   // 绘制文字（支持旋转、透明度、缩放）
+  // 注意：fontSize 除以 this.scale，抵消 ctx.scale 变换，保持屏幕像素大小恒定
   _drawText(ctx, t) {
     const rotation = t.rotation || 0;
     const opacity = t.opacity !== undefined ? t.opacity : 1;
     const scale = t.scale !== undefined ? t.scale : 1;
-    const fontSize = (t.fontSize || 24) * scale;
+    const fontSize = (t.fontSize || 24) * scale / this.scale;
     const color = t.color || '#422006';
     const content = t.content || '';
 
@@ -1007,11 +1009,12 @@ export class CanvasEngine {
   }
 
   // 获取文字的边界框（世界坐标）
+  // 注意：fontSize 除以 this.scale，与 _drawText 保持一致
   _getTextBounds(t) {
     const content = t.content || '';
     if (!content) return null;
     const scale = t.scale !== undefined ? t.scale : 1;
-    const fontSize = (t.fontSize || 24) * scale;
+    const fontSize = (t.fontSize || 24) * scale / this.scale;
     const lines = content.split('\n');
     const lineHeight = fontSize * 1.3;
 
