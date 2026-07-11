@@ -985,7 +985,7 @@ export class CanvasEngine {
     const rotation = t.rotation || 0;
     const opacity = t.opacity !== undefined ? t.opacity : 1;
     const scale = t.scale !== undefined ? t.scale : 1;
-    const fontSize = (t.fontSize || 32) * scale;
+    const fontSize = (t.fontSize || 24) * scale;
     const color = t.color || '#422006';
     const content = t.content || '';
 
@@ -1011,7 +1011,7 @@ export class CanvasEngine {
     const content = t.content || '';
     if (!content) return null;
     const scale = t.scale !== undefined ? t.scale : 1;
-    const fontSize = (t.fontSize || 32) * scale;
+    const fontSize = (t.fontSize || 24) * scale;
     const lines = content.split('\n');
     const lineHeight = fontSize * 1.3;
 

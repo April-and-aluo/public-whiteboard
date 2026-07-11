@@ -8,8 +8,8 @@
 // 通过配置 WS_URL 切换
 // ============================================
 
-import * as Y from './yjs-bundle.js?v=20260711l';
-import { WebsocketProvider, WebrtcProvider } from './yjs-bundle.js?v=20260711l';
+import * as Y from './yjs-bundle.js?v=20260711m';
+import { WebsocketProvider, WebrtcProvider } from './yjs-bundle.js?v=20260711m';
 
 // ============================================
 // 配置区
@@ -457,7 +457,7 @@ export class YjsSync {
   // ===== 文字操作 =====
 
   // 添加一段文字
-  addText(x, y, content, fontSize = 32, color = '#422006', rotation = 0, opacity = 1, scale = 1) {
+  addText(x, y, content, fontSize = 24, color = '#422006', rotation = 0, opacity = 1, scale = 1) {
     if (!this.texts) return;
     const text = new Y.Map();
     text.set('x', x);
@@ -519,7 +519,7 @@ export class YjsSync {
         x: t.get('x'),
         y: t.get('y'),
         content: t.get('content') || '',
-        fontSize: t.get('fontSize') || 32,
+        fontSize: t.get('fontSize') || 24,
         color: t.get('color') || '#422006',
         rotation: t.get('rotation') || 0,
         opacity: t.get('opacity') !== undefined ? t.get('opacity') : 1,
