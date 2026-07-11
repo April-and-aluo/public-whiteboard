@@ -21,7 +21,7 @@ export class MapLayer {
     this._loadedTiles = new Map();    // tileId -> {admin1: [], countries: []}
     this._loadingTiles = new Set();
     this._tileUpdateTimer = null;
-    this._cdnVersion = '20260711g';   // 缓存破坏版本号
+    this._cdnVersion = '20260711h';   // 缓存破坏版本号
     this._cdnBase = `https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data`;
   }
 
