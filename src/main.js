@@ -2,10 +2,10 @@
 // main.js - 应用入口，协调各模块初始化
 // ============================================
 
-import { CanvasEngine } from './canvas-engine.js?v=20260711k';
-import { CursorLayer } from './cursor-layer.js?v=20260711k';
-import { ExportManager } from './export.js?v=20260711k';
-import { yjsSync } from './yjs-sync.js?v=20260711k';
+import { CanvasEngine } from './canvas-engine.js?v=20260711l';
+import { CursorLayer } from './cursor-layer.js?v=20260711l';
+import { ExportManager } from './export.js?v=20260711l';
+import { yjsSync } from './yjs-sync.js?v=20260711l';
 
 // MapLayer 按需加载（仅地图模式）
 
@@ -331,7 +331,7 @@ function showModeSelect(userName) {
 
 async function initMapLayer() {
   try {
-    const { MapLayer } = await import('./map-layer.js?v=20260711k');
+    const { MapLayer } = await import('./map-layer.js?v=20260711l');
     const app = document.getElementById('app');
     mapLayer = new MapLayer(app, engine);
     await mapLayer.init();
@@ -434,7 +434,7 @@ function startApp(userName, mode = 'free') {
     const screen = engine.worldToScreen(worldX, worldY);
     // 立即在 Yjs 中创建空文字元素，用户输入实时更新到画布
     const textId = yjsSync.addText(
-      worldX, worldY, '', 24, '#422006', 0, 1, 1
+      worldX, worldY, '', 32, '#422006', 0, 1, 1
     );
     pendingTextPos = { worldX, worldY, screenX: screen.x, screenY: screen.y };
     editingTextId = textId;
@@ -979,6 +979,9 @@ function showImagePropsPanel(img, text) {
   const infoTime = document.getElementById('props-info-time');
   const textEditDiv = document.getElementById('props-text-edit');
   const textContent = document.getElementById('prop-text-content');
+  const fontsizeRow = document.getElementById('props-fontsize-row');
+  const fontsizeSlider = document.getElementById('prop-fontsize');
+  const fontsizeValue = document.getElementById('prop-fontsize-value');
 
   const item = img || text;
 
@@ -1004,8 +1007,14 @@ function showImagePropsPanel(img, text) {
     if (text) {
       textEditDiv.classList.remove('hidden');
       textContent.value = text.content || '';
+      // 显示字号滑块
+      fontsizeRow.classList.remove('hidden');
+      const fs = text.fontSize || 32;
+      fontsizeSlider.value = fs;
+      fontsizeValue.textContent = fs + 'px';
     } else {
       textEditDiv.classList.add('hidden');
+      fontsizeRow.classList.add('hidden');
     }
   } else {
     // 放置新图片时（无信息）
@@ -1018,6 +1027,7 @@ function showImagePropsPanel(img, text) {
     opacityValue.textContent = '100%';
     infoDiv.classList.add('hidden');
     textEditDiv.classList.add('hidden');
+    fontsizeRow.classList.add('hidden');
   }
 
   panel.classList.remove('hidden');
@@ -1098,6 +1108,8 @@ function setupImagePropsPanel() {
   const opacityValue = document.getElementById('prop-opacity-value');
   const closeBtn = document.getElementById('props-panel-close');
   const textContent = document.getElementById('prop-text-content');
+  const fontsizeSlider = document.getElementById('prop-fontsize');
+  const fontsizeValue = document.getElementById('prop-fontsize-value');
 
   function updateProp(key, value) {
     if (selectedType === 'image' && selectedImageId) {
@@ -1133,6 +1145,12 @@ function setupImagePropsPanel() {
     const v = parseInt(opacitySlider.value);
     opacityValue.textContent = v + '%';
     updateProp('opacity', v / 100);
+  });
+
+  fontsizeSlider.addEventListener('input', () => {
+    const v = parseInt(fontsizeSlider.value);
+    fontsizeValue.textContent = v + 'px';
+    updateProp('fontSize', v);
   });
 
   textContent.addEventListener('input', () => {
