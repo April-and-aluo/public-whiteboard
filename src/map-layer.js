@@ -22,7 +22,7 @@ export class MapLayer {
     this._loadingTiles = new Set();
     this._tileUpdateTimer = null;
     this._cdnVersion = '20260711h';   // 缓存破坏版本号
-    this._cdnBase = `https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data`;
+    this._cdnBase = `https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@f9690d7/src/map-data`;
   }
 
   async init() {
