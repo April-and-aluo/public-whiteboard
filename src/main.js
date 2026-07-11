@@ -2,10 +2,10 @@
 // main.js - 应用入口，协调各模块初始化
 // ============================================
 
-import { CanvasEngine } from './canvas-engine.js?v=20260711i';
-import { CursorLayer } from './cursor-layer.js?v=20260711i';
-import { ExportManager } from './export.js?v=20260711i';
-import { yjsSync } from './yjs-sync.js?v=20260711i';
+import { CanvasEngine } from './canvas-engine.js?v=20260711j';
+import { CursorLayer } from './cursor-layer.js?v=20260711j';
+import { ExportManager } from './export.js?v=20260711j';
+import { yjsSync } from './yjs-sync.js?v=20260711j';
 
 // MapLayer 按需加载（仅地图模式）
 
@@ -331,7 +331,7 @@ function showModeSelect(userName) {
 
 async function initMapLayer() {
   try {
-    const { MapLayer } = await import('./map-layer.js?v=20260711i');
+    const { MapLayer } = await import('./map-layer.js?v=20260711j');
     const app = document.getElementById('app');
     mapLayer = new MapLayer(app, engine);
     await mapLayer.init();
@@ -390,9 +390,10 @@ function startApp(userName, mode = 'free') {
   // 橡皮擦 -> 只擦除笔画，不擦除图片和文字（避免绘画时误删）
   engine.onErase = (worldX, worldY) => {
     const strokes = yjsSync.getAllStrokes();
+    const worldThreshold = (s_width) => (s_width / engine.scale) * 1.5 + 8 / engine.scale;
     for (let i = strokes.length - 1; i >= 0; i--) {
       const s = strokes[i];
-      if (pointToStrokeDistance(worldX, worldY, s) < s.width * 1.5 + 8) {
+      if (pointToStrokeDistance(worldX, worldY, s) < worldThreshold(s.width)) {
         yjsSync.removeStroke(s.index);
         return true;
       }

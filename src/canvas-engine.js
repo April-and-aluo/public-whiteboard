@@ -872,8 +872,10 @@ export class CanvasEngine {
     const points = stroke.points;
     if (points.length < 1) return;
 
+    // 画笔宽度按屏幕像素计算，除以 scale 抵消 ctx.scale 变换
+    const w = stroke.width / this.scale;
     ctx.strokeStyle = stroke.color;
-    ctx.lineWidth = stroke.width;
+    ctx.lineWidth = w;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
@@ -882,7 +884,7 @@ export class CanvasEngine {
 
     if (points.length === 1) {
       // 单点 -> 画圆点
-      ctx.arc(points[0][0], points[0][1], stroke.width / 2, 0, Math.PI * 2);
+      ctx.arc(points[0][0], points[0][1], w / 2, 0, Math.PI * 2);
       ctx.fillStyle = stroke.color;
       ctx.fill();
     } else {
