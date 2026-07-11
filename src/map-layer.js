@@ -21,7 +21,7 @@ export class MapLayer {
     this._loadedTiles = new Map();    // tileId -> {admin1: [], countries: []}
     this._loadingTiles = new Set();
     this._tileUpdateTimer = null;
-    this._cdnVersion = '20260711f';   // 缓存破坏版本号
+    this._cdnVersion = '20260711g';   // 缓存破坏版本号
     this._cdnBase = `https://cdn.jsdelivr.net/gh/april-and-aluo/public-whiteboard@main/src/map-data`;
   }
 
@@ -131,34 +131,24 @@ export class MapLayer {
     this._loadingTiles.add(tileId);
 
     try {
-      // 同时加载 admin1 和 countries
-      const [admin1Resp, countriesResp] = await Promise.allSettled([
-        fetch(this._tileURL(tileId, 'admin1')),
-        fetch(this._tileURL(tileId, 'countries')),
-      ]);
+      // 只加载 admin1（国家边界用单文件，不裁剪避免直线伪影）
+      const resp = await fetch(this._tileURL(tileId, 'admin1'));
 
-      const tileData = { admin1: [], countries: [] };
+      const tileData = { admin1: [] };
 
-      if (admin1Resp.status === 'fulfilled' && admin1Resp.value.ok) {
-        const data = await admin1Resp.value.json();
+      if (resp.ok) {
+        const data = await resp.json();
         if (data.features?.length) {
           tileData.admin1 = this._preprocessGeoJSON(data).features;
         }
       }
 
-      if (countriesResp.status === 'fulfilled' && countriesResp.value.ok) {
-        const data = await countriesResp.value.json();
-        if (data.features?.length) {
-          tileData.countries = this._preprocessGeoJSON(data).features;
-        }
-      }
-
       this._loadedTiles.set(tileId, tileData);
-      console.log(`[MapLayer] Tile ${tileId}: ${tileData.admin1.length} admin1, ${tileData.countries.length} countries`);
+      console.log(`[MapLayer] Tile ${tileId}: ${tileData.admin1.length} admin1 features`);
       this._refreshTileData();
     } catch (e) {
       console.error('[MapLayer] Tile error:', tileId, e.message);
-      this._loadedTiles.set(tileId, { admin1: [], countries: [] });
+      this._loadedTiles.set(tileId, { admin1: [] });
     } finally {
       this._loadingTiles.delete(tileId);
     }
@@ -167,29 +157,20 @@ export class MapLayer {
   // 合并所有已加载区块的数据，更新地图
   _refreshTileData() {
     const allAdmin1 = [];
-    const allCountries = [];
     const seenA = new Set();
-    const seenC = new Set();
 
     for (const [, td] of this._loadedTiles) {
       for (const f of td.admin1) {
         const key = (f.properties?.name || '') + JSON.stringify(f.geometry?.coordinates?.[0]?.[0]?.[0] || '');
         if (!seenA.has(key)) { seenA.add(key); allAdmin1.push(f); }
       }
-      for (const f of td.countries) {
-        const key = (f.properties?.name || '') + JSON.stringify(f.geometry?.coordinates?.[0]?.[0]?.[0] || '');
-        if (!seenC.has(key)) { seenC.add(key); allCountries.push(f); }
-      }
     }
 
     if (this._mode === 'maplibre' && this.map) {
       const aSrc = this.map.getSource('admin1');
-      const cSrc = this.map.getSource('countries-tile');
       if (aSrc) aSrc.setData({ type: 'FeatureCollection', features: allAdmin1 });
-      if (cSrc) cSrc.setData({ type: 'FeatureCollection', features: allCountries });
     } else if (this._mode === 'canvas2d' && this.fallback) {
       this.fallback.admin1 = { type: 'FeatureCollection', features: allAdmin1 };
-      this.fallback.countriesTile = { type: 'FeatureCollection', features: allCountries };
       this._renderFallback();
     }
   }
@@ -240,26 +221,23 @@ export class MapLayer {
     });
 
     this.map.on('load', () => {
-      // 初始低精度国家填充（快速显示）
+      // 国家填充和边界（单文件，无裁剪伪影）
       if (processedCountries) {
         this.map.addSource('countries', { type: 'geojson', data: processedCountries });
         this.map.addLayer({
           id: 'country-fill', type: 'fill', source: 'countries',
           paint: { 'fill-color': '#f5f5f0', 'fill-opacity': 1 },
         });
+        this.map.addLayer({
+          id: 'country-borders', type: 'line', source: 'countries',
+          paint: {
+            'line-color': '#888',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 5, 1.2, 7, 2.0, 10, 3.0],
+            'line-opacity': 0.85,
+          },
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+        });
       }
-
-      // 高精度国家边界（从区块加载，初始为空）
-      this.map.addSource('countries-tile', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      this.map.addLayer({
-        id: 'country-borders-hp', type: 'line', source: 'countries-tile',
-        paint: {
-          'line-color': '#888',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 5, 1.2, 7, 2.0, 10, 3.0],
-          'line-opacity': 0.85,
-        },
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-      });
 
       // 行政区划边界
       this.map.addSource('admin1', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -301,8 +279,7 @@ export class MapLayer {
 
     this.fallback = {
       canvas: mapCanvas, ctx: mapCanvas.getContext('2d'),
-      countries: processedCountries,        // 低精度初始数据（仅填充）
-      countriesTile: { type: 'FeatureCollection', features: [] }, // 高精度区块数据
+      countries: processedCountries,
       admin1: { type: 'FeatureCollection', features: [] },
       centerLng: 0, centerLat: 30, zoom: 3.5,
     };
@@ -422,7 +399,7 @@ export class MapLayer {
 
   _renderFallback() {
     if (!this.fallback) return;
-    const { ctx, countries, countriesTile, admin1 } = this.fallback;
+    const { ctx, countries, admin1 } = this.fallback;
     const vp = this._getCanvasViewport();
     const { offsetX, offsetY, pixelScale, w, h } = vp;
     const padLng = (vp.lngMax - vp.lngMin) * 0.1;
@@ -437,7 +414,7 @@ export class MapLayer {
     this.engine.offsetY = offsetY;
     this.engine.scale = pixelScale;
 
-    // 1. 国家填充（用初始低精度数据）
+    // 1. 国家填充
     ctx.fillStyle = '#f5f5f0';
     for (const f of countries.features) {
       if (this._featureInViewport(f, viewport)) this._drawFeature(ctx, f, offsetX, offsetY, pixelScale, true);
@@ -453,12 +430,11 @@ export class MapLayer {
       }
     }
 
-    // 3. 国家边界（优先用高精度区块数据，回退到初始数据）
-    const borderSource = (countriesTile?.features?.length > 0) ? countriesTile : countries;
+    // 3. 国家边界（用完整的单文件数据，无裁剪伪影）
     ctx.strokeStyle = '#888';
     ctx.lineWidth = Math.max(0.5, pixelScale * 0.4);
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    for (const f of borderSource.features) {
+    for (const f of countries.features) {
       if (this._featureInViewport(f, viewport)) this._drawFeature(ctx, f, offsetX, offsetY, pixelScale, false);
     }
 
